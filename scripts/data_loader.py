@@ -2,11 +2,11 @@ import glob
 import numpy as np
 import concurrent.futures
 from multiprocessing import cpu_count
-# from torch import nn, tanh, relu
+from torch import nn, tanh, relu
 import sys
 from pathlib import Path
 import resource
-# import torch
+import torch
 import random 
 import os
 import open3d as o3d
@@ -19,10 +19,11 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 class DataAnalyzer:
     def __init__(self, visualize=False):
-      # if torch.cuda.is_available():
-      #   self.device = torch.device('cuda')
-      # else:
-      #   self.device = torch.device('cpu')
+      if torch.cuda.is_available():
+        self.device = torch.device('cuda')
+      else:
+        self.device = torch.device('cpu')
+      print("Initializing DataAnalyzer on {}...".format(self.device))
       self.drones_num = 10
       self.replay_dir = "../data/training/replay/agents{}_*.npy".format(self.drones_num)
       self.train_dataset = []
@@ -37,8 +38,8 @@ class DataAnalyzer:
       print("replay_data.shape = {}, map_data.shape = {}".format(replay_data.shape, map_data.shape))
       for t in range(0, replay_data.shape[0]-1):
         if replay_data[t,0] == map_data[t,0]:
+          print("Time:{} at t:{}".format(map_data[t,0], t))
           point_clouds = map_data[t,1]
-          log_time = replay_data[t,0]
           for i in range(0, replay_data.shape[1]-1):
             p_i_world = np.array(replay_data[t,i+1][0:3])
             p_next = np.array(replay_data[t+1,i+1][0:3])
@@ -69,7 +70,10 @@ class DataAnalyzer:
                 v_ij_local = np.dot(R_inverse_iw, v_j_world - v_i_world) + np.cross(w_i_world, p_ij_local)
                 self.neighbor_data = np.concatenate((self.neighbor_data, p_ij_local.reshape(1,-1), v_ij_local.reshape(1,-1)), axis=0)
                 
+            if(map_data[t,1] == map_data[t+1,1]):
+              print("")
             if(self.visualize and t == 0 and i == 0):
+              print("Visualizing Data at t = {}, agent_id = {}".format(t, i))
               self.visualize_data(replay_data, map_data[t,1], self.neighbor_data, observation_local, p_next_local)
 
             # データセットの作成(TODO)
@@ -82,7 +86,9 @@ class DataAnalyzer:
       return dataset
 
     def load_data(self):
+      print("Loading Data...")
       files = glob.glob(self.replay_dir)
+      print("Size of files: ", len(files))
       len_case = 0
       if self.visualize:
         self.generate_dataset(files[0])
@@ -105,6 +111,9 @@ class DataAnalyzer:
       ax.set_xlabel("x")
       ax.set_ylabel("y")
       ax.set_zlabel("z")
+      ax.set_xlim(-15, 15)
+      ax.set_ylim(-15, 15)
+      ax.set_zlim(0, 15)
       colors = ["r", "g", "b", "c", "m", "y", "k"]
       for agent_id in range(0, replay_data.shape[1]-1):
         # エージェントの軌跡の描画
@@ -137,7 +146,7 @@ class DataAnalyzer:
         ax2.quiver(neighbor_pos[0], neighbor_pos[1], neighbor_pos[2], 
                     neighbor_vel[0], neighbor_vel[1], neighbor_vel[2], 
                     color=colors[agent_id % len(colors)], length=0.5, normalize=True)
-      ax.scatter(point_cloud_local[:,0], point_cloud_local[:,1], point_cloud_local[:,2], 
+      ax2.scatter(point_cloud_local[:,0], point_cloud_local[:,1], point_cloud_local[:,2], 
                     color=colors[agent_id % len(colors)], s=1)
       ax2.quiver(0, 0, 0, p_next_local[0], p_next_local[1], p_next_local[2], 
                     color="black", length=0.5, normalize=True)
