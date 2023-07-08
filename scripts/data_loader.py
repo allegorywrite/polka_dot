@@ -2,11 +2,11 @@ import glob
 import numpy as np
 import concurrent.futures
 from multiprocessing import cpu_count
-from torch import nn, tanh, relu
+# from torch import nn, tanh, relu
 import sys
 from pathlib import Path
 import resource
-import torch
+# import torch
 import random 
 import os
 import open3d as o3d
@@ -19,10 +19,10 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 class DataAnalyzer:
     def __init__(self, visualize=False):
-      if torch.cuda.is_available():
-        self.device = torch.device('cuda')
-      else:
-        self.device = torch.device('cpu')
+      # if torch.cuda.is_available():
+      #   self.device = torch.device('cuda')
+      # else:
+      #   self.device = torch.device('cpu')
       self.drones_num = 10
       self.replay_dir = "../data/training/replay/agents{}_*.npy".format(self.drones_num)
       self.train_dataset = []
@@ -70,7 +70,7 @@ class DataAnalyzer:
                 self.neighbor_data = np.concatenate((self.neighbor_data, p_ij_local.reshape(1,-1), v_ij_local.reshape(1,-1)), axis=0)
                 
             if(self.visualize and t == 0 and i == 0):
-              self.visualize_data(replay_data, map_data[t,1], neighbor_data, observation_local, p_next_local)
+              self.visualize_data(replay_data, map_data[t,1], self.neighbor_data, observation_local, p_next_local)
 
             # データセットの作成(TODO)
             dataset = []
@@ -118,7 +118,7 @@ class DataAnalyzer:
         ax.plot(trajectory_x, trajectory_y, trajectory_z, 
                 color=colors[agent_id % len(colors)], label="drone{}".format(agent_id))
         # 点群の描画
-        point_cloud = point_clouds_world[i]
+        point_cloud = np.array(point_clouds_world[agent_id])
         ax.scatter(point_cloud[:,0], point_cloud[:,1], point_cloud[:,2], 
                     color=colors[agent_id % len(colors)], s=1)
       plt.legend()
@@ -129,7 +129,7 @@ class DataAnalyzer:
       ax2.set_xlabel("x")
       ax2.set_ylabel("y")
       ax2.set_zlabel("z")
-      for agent_id in range(0, replay_data.shape[1]-1):
+      for agent_id in range(0, int(replay_data_local.shape[0]/2)):
         neighbor_pos = replay_data_local[agent_id*2] # x, y, z
         neighbor_vel = replay_data_local[agent_id*2+1] # vx, vy, vz
         ax2.scatter(neighbor_pos[0], neighbor_pos[1], neighbor_pos[2], 
