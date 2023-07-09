@@ -20,13 +20,13 @@ import yaml
 sys.path.append(str(Path(__file__).parent.parent))
 
 class DataAnalyzer:
-	def __init__(self, visualize=False):
+	def __init__(self, drone_num, visualize=False):
 		# if torch.cuda.is_available():
 		#   self.device = torch.device('cuda')
 		# else:
 		#   self.device = torch.device('cpu')
 		# print("Initializing DataAnalyzer on {}...".format(self.device))
-		self.drones_num = 3
+		self.drones_num = drone_num
 		self.dim_per_drone = 14
 		self.replay_dir = "../data/training/replay/agents{}_*.csv".format(self.drones_num)
 		self.train_dataset = []
@@ -103,7 +103,8 @@ class DataAnalyzer:
 
 		return neighbor_states, observation_local, goal_i_local, p_next_local
 
-	def generate_dataset(self, replay_file):
+	def generate_dataset(self, replay_file, visualize=False):
+		print("visualize = {}".format(visualize))
 		# リプレイデータの読み込み
 		df = pd.read_csv(replay_file, header=None)
 		replay_data = df.to_numpy()
@@ -127,8 +128,8 @@ class DataAnalyzer:
 				# ローカル座標系に変換
 				neighbor_state_local_array, observation_local, goal_local, p_next_local = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, observation_world, p_next)
 
-			if(self.visualize and t > 130):
-				self.visualize = False
+			if(visualize and t > 30):
+				visualize = False
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
 				self.visualize_data(replay_data, observation_world_array, neighbor_state_local_array, observation_local, goal_local, p_next_local, t, q_i_world)
 		# データセットの作成(TODO)
@@ -140,6 +141,9 @@ class DataAnalyzer:
 		files = glob.glob(self.replay_dir)
 		print("Size of files: ", len(files))
 		len_case = 0
+		if self.visualize:
+			print("Visualizing Data...")
+			self.generate_dataset(files[0], self.visualize)
 		with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count()) as executor:
 			itr = 0
 			for dataset in executor.map(self.generate_dataset, files):
@@ -215,7 +219,8 @@ class DataAnalyzer:
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument("--visualize", action="store_true")
+  parser.add_argument("--drone_num", type=int, default=3)
   args = parser.parse_args()
-  analyzer = DataAnalyzer(args.visualize)
+  analyzer = DataAnalyzer(args.drone_num, args.visualize)
   analyzer.load_data()
   # analyzer.analyze()
