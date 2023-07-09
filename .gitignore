@@ -1,2 +1,3 @@
-data/training/doubleintegrator/
-data/training/singleintegrator/
+/data/training/**
+!/data/training/**/
+!/data/training/**/.gitkeep
