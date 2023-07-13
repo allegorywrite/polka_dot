@@ -67,6 +67,45 @@ class DataAnalyzer:
 			replay_data[t+1,self.dim_per_drone*agent_id+1:self.dim_per_drone*agent_id+4])
 
 		return p_i_world, q_i_world, v_i_world, w_i_world, goal_i, observation_world, p_next
+
+	def pointcloud_to_depth(self, point_cloud_data):
+		point_cloud = np.asarray(point_cloud_data.points)
+		pixel_width = 1000
+		pixel_height = 1000
+		focal = 0.05
+		focal_x = focal * pixel_width
+		focal_y = focal * pixel_height
+		r_max = 8
+
+		projected_points = []
+		for i in range(point_cloud.shape[0]):
+			u = - int(focal_x * point_cloud[i][2] / point_cloud[i][0])
+			v = - int(focal_y * point_cloud[i][1] / point_cloud[i][0])
+			z = np.linalg.norm(point_cloud[i])
+			projected_points.append([u, v, z])
+		min_u = min(point[0] for point in projected_points)
+		min_v = min(point[1] for point in projected_points)
+		max_u = max(point[0] for point in projected_points)
+		max_v = max(point[1] for point in projected_points)
+
+		depth_data = np.full((max_u - min_u + 1, max_v - min_v + 1), np.inf)
+		for i in range(point_cloud.shape[0]):
+			u, v, z = projected_points[i]
+			scale = r_max / z
+			u_min = u - int(scale/2)
+			u_max = u + int(scale/2)
+			v_min = v - int(scale/2)
+			v_max = v + int(scale/2)
+			for u in range(u_min, u_max+1):
+				if u - min_u < 0 or u - min_u >= max_u - min_u + 1:
+					continue
+				for v in range(v_min, v_max+1):
+					if v - min_v < 0 or v - min_v >= max_v - min_v + 1:
+						continue
+					if z < depth_data[u - min_u, v - min_v]:
+						depth_data[u - min_u, v - min_v] = z
+		
+		return depth_data
 	
 	def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, observation_world, p_next):
 		# Observation(Local座標型)
@@ -76,6 +115,7 @@ class DataAnalyzer:
 		pcd.points = o3d.utility.Vector3dVector(observation_world)
 		pcd.translate(-p_i_world)
 		pcd.rotate(R_inverse_iw, center=(0,0,0))
+		depth_data = self.pointcloud_to_depth(pcd)
 		observation_local = np.asarray(pcd.points)
 		# Action(Local座標型)
 		p_next_local = np.dot(R_inverse_iw, p_next - p_i_world)
@@ -101,7 +141,7 @@ class DataAnalyzer:
 				# v_ij_local = np.dot(R_inverse_iw, v_j_world - v_i_world) + np.cross(w_i_world, p_ij_local)
 				neighbor_states = np.concatenate((neighbor_states, p_ij_local.reshape(1,-1), v_ij_local.reshape(1,-1)), axis=0)
 
-		return neighbor_states, observation_local, goal_i_local, p_next_local
+		return neighbor_states, observation_local, goal_i_local, p_next_local, depth_data
 
 	def generate_dataset(self, replay_file):
 		# リプレイデータの読み込み
@@ -125,12 +165,12 @@ class DataAnalyzer:
 				p_i_world, q_i_world, v_i_world, w_i_world, goal_i, observation_world, p_next = self.getSOA_of_world(replay_data, map_data, point_cloud_data, t, agent_id)
 				observation_world_array.append(observation_world)
 				# ローカル座標系に変換
-				neighbor_state_local_array, observation_local, goal_local, p_next_local = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, observation_world, p_next)
+				neighbor_state_local_array, observation_local, goal_local, p_next_local, depth_data = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, observation_world, p_next)
 
-			if(self.visualize and t > 130):
+			if(self.visualize and t > 30):
 				self.visualize = False
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
-				self.visualize_data(replay_data, observation_world_array, neighbor_state_local_array, observation_local, goal_local, p_next_local, t, q_i_world)
+				self.visualize_data(replay_data, observation_world_array, neighbor_state_local_array, observation_local, goal_local, p_next_local, t, q_i_world, depth_data)
 		# データセットの作成(TODO)
 		dataset = []
 		return dataset
@@ -151,7 +191,7 @@ class DataAnalyzer:
 				self.train_dataset.extend(dataset)
 		print('Total Training Dataset Size: ',len(self.train_dataset))
 
-	def visualize_data(self, replay_data, observation_world_array, neighbor_state_local_array, observation_local, goal_local, p_next_local, t, q_i_world):
+	def visualize_data(self, replay_data, observation_world_array, neighbor_state_local_array, observation_local, goal_local, p_next_local, t, q_i_world, depth_data):
 		# ワールド座標系
 		fig = plt.figure()
 		ax = fig.add_subplot(111, projection="3d")
@@ -188,6 +228,7 @@ class DataAnalyzer:
 		ax2.set_xlabel("x")
 		ax2.set_ylabel("y")
 		ax2.set_zlabel("z")
+		ax2.set_zlim(-1, 8)
 		ax2.scatter(0, 0, 0, color="black", s=10)
 		ax2.set_title("Snapshot on local map (Dataset) at t = {}".format(t))
 		for agent_id in range(0, int(neighbor_state_local_array.shape[0]/2)):
@@ -210,6 +251,11 @@ class DataAnalyzer:
 		# Actionの描画
 		ax2.quiver(0, 0, 0, p_next_local[0], p_next_local[1], p_next_local[2], 
 									color="black", length=1.0, normalize=True)
+		# Depthの描画
+		fig3 = plt.figure()
+		ax3 = fig3.add_subplot(111)
+		print("depth_shape:",depth_data.shape)
+		ax3.imshow(depth_data, cmap="plasma")
 		plt.show()
 
 if __name__ == '__main__':
