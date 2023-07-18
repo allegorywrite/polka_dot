@@ -36,9 +36,9 @@ if __name__ == '__main__':
     test_dataset = CustomDataset(num_images=100, map_pcd=global_map_world_pc)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    # depth_data = dataset.get_local_observation(global_map_world_pc)
-    # plt.imshow(depth_data, cmap="plasma")
-    # plt.show()
+    depth_data = train_dataset.get_local_observation(global_map_world_pc)
+    plt.imshow(depth_data, cmap="plasma")
+    plt.show()
 
     model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim).to(device)
 
@@ -56,11 +56,10 @@ if __name__ == '__main__':
             optimizer.zero_grad()
 
             results = model.forward(real_img, labels = labels)
-            train_loss = model.loss_function(*results,
+            train_losses = model.loss_function(*results,
                 M_N = kld_weight,
-                optimizer_idx=optimizer_idx,
                 batch_idx = batch_idx)
-            
+            train_loss = train_losses["loss"]
             train_loss.backward()
             optimizer.step()
             overall_loss += train_loss.item()

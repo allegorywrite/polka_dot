@@ -11,20 +11,27 @@ from torch.utils.data import DataLoader
 class CustomDataset(Dataset):
     def __init__(self, num_images, map_pcd):
         self.num_images = num_images
+        self.images = []
         self.transform = transforms.Compose(
             [transforms.ToTensor(),
              transforms.Normalize((0.5,), (0.5,))])
         self.camera_width = 640
         self.camera_height = 360
         self.downsampling_factor = 1
-        self.target_dim = (180, 320)
+        self.target_dim = (64, 64)
         self.map_lower_bound = [-13.0, -10.0, 0.0]
         self.map_upper_bound = [13.0, 10.0, 1.0]
         self.map_pcd = map_pcd
         
-    def generateImage(self):
-        image = self.get_local_observation(self.map_pcd)
-        return image
+    def generateImage(self, idx):
+        if idx < len(self.images):
+            return self.images[idx]
+        else:
+            if idx/self.num_images*100 % 1 == 0:
+                print("Generate Image: {}%".format(int(idx/self.num_images*100)))
+            image = self.get_local_observation(self.map_pcd)
+            self.images.append(image)
+            return image
 
     def random_camera_pos(self):
         # map_lower_boundとmap_upper_boundの間でランダムな位置を設定
@@ -98,9 +105,7 @@ class CustomDataset(Dataset):
         return downsampled_image
     
     def __getitem__(self, idx):
-        if idx/self.num_images*100 % 1 == 0:
-          print("Progress: {}%".format(int(idx/self.num_images*100)))
-        image = self.generateImage()
+        image = self.generateImage(idx)
         image = self.transform(image)
         return image, image # 入力と出力が同じになります
     
