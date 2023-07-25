@@ -10,6 +10,7 @@ from skimage.transform import resize
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from torch import optim, nn
+import os
 
 if __name__ == '__main__':
 
@@ -18,6 +19,8 @@ if __name__ == '__main__':
     else:
         device = torch.device('cpu')
 
+    image_num_train = 80000
+    image_num_test = 100
     batch_size = 100 # バッチサイズ
     hidden_dims = [32, 64, 128, 256, 512] # 隠れ層の次元数
     latent_dim = 200 # 潜在変数の次元数
@@ -27,18 +30,21 @@ if __name__ == '__main__':
     weight_decay = 0.0 # 重み減衰
     kld_weight = 0.00025 # KLDの重み
     manual_seed: 1265 # 乱数シード
-    epochs = 1000 # エポック数
+    epochs = 50 # エポック数
+    average_loss_array = [] # 平均損失の記録用配列
 
-    vision_file_path = "../map/map.pcd"
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/output.png")
+
+    vision_file_path = "map/map.pcd"
     global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 
-    train_dataset = CustomDataset(num_images=1000, map_pcd=global_map_world_pc)
-    test_dataset = CustomDataset(num_images=100, map_pcd=global_map_world_pc)
+    train_dataset = CustomDataset(num_images=image_num_train, map_pcd=global_map_world_pc)
+    test_dataset = CustomDataset(num_images=image_num_test, map_pcd=global_map_world_pc)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    depth_data = train_dataset.get_local_observation(global_map_world_pc)
-    plt.imshow(depth_data, cmap="plasma")
-    plt.show()
+    # depth_data = train_dataset.get_local_observation(global_map_world_pc)
+    # plt.imshow(depth_data, cmap="plasma")
+    # plt.show()
 
     model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim).to(device)
 
@@ -65,8 +71,21 @@ if __name__ == '__main__':
             overall_loss += train_loss.item()
         scheduler.step()
 
+        average_loss_array.append(overall_loss / (batch_idx*batch_size))
+
         print("\tEpoch", epoch + 1, "complete!", "\tData Size: ", batch_idx*batch_size, "\tAverage Loss: ", overall_loss / (batch_idx*batch_size))
     print("Finish!!")
+
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/loss.png")
+
+    # 損失を対数グラフで保存してclear
+    plt.plot(average_loss_array)
+    plt.xlabel("Epoch")
+    plt.xlim(0, epochs)
+    plt.ylabel("Loss")
+    plt.yscale("log")
+    plt.savefig(output_dir)
+    plt.clf()
 
     # model.eval()
     # test_loss = 0
@@ -91,7 +110,7 @@ if __name__ == '__main__':
             
             results = model.forward(real_img, labels = labels)
             loss = model.loss_function(*results, M_N = kld_weight)
-            test_loss += loss.item()
+            test_loss += loss["loss"]
 
     average_test_loss = test_loss / len(test_loader.dataset)
     print("Average test loss: ", average_test_loss)
@@ -102,20 +121,18 @@ if __name__ == '__main__':
         for i in range(n_samples):
             test_img, labels = test_dataset[i]
             test_img = test_img.unsqueeze(0).to(device)
-            
+
             labels = labels.unsqueeze(0).to(device)
-            recons_img = model.generate(test_img, labels)
-            
+            recons_img = model.generate(test_img)
+
             ax[i, 0].imshow(test_img.cpu().squeeze().numpy(), cmap='gray')
             ax[i, 0].set_title('Original Image')
             ax[i, 0].axis('off')
-            
+
             ax[i, 1].imshow(recons_img.cpu().squeeze().numpy(), cmap='gray')
             ax[i, 1].set_title('Reconstructed Image')
             ax[i, 1].axis('off')
-        
-        plt.tight_layout()
-        plt.show()
 
-                
-            
+    plt.tight_layout()
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/reconstructed_images.png")
+    plt.savefig(output_dir)  # Save the figure before showing it
