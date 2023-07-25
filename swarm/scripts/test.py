@@ -1,8 +1,9 @@
-import swarm.models.dataset import CustomDataset
-import VAE.models.vanilla_vae import VanillaVAE
+from swarm.models.dataset import CustomDataset
+from VAE.models.vanilla_vae import VanillaVAE
+import torch
 
 if __name__ == '__main__':
-  drone_num = 10
+  drone_num = 3
   in_channels = 1
   latent_dim = 200 # 潜在変数の次元数
 
@@ -13,7 +14,7 @@ if __name__ == '__main__':
   train_dataset, test_dataset = dataset.load_data()
   # エンコーダーの読み込み
   model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim)
-  model.load_state_dict(torch.load('../VAE/data/model.pth'))
+  model.load_state_dict(torch.load('../VAE/output/model.pth'))
   model.eval()
   # デプス画像を潜在変数に変換
   for train_data in train_dataset:

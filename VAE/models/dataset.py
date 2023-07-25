@@ -108,9 +108,6 @@ class CustomDataset(Dataset):
         # アップデート
         depth_image = vis.capture_depth_float_buffer(do_render=True)
         depth_image = np.array(depth_image)
-        # depth_image_max = np.max(depth_image)
-        # depth_image_inverted = np.subtract(depth_image_max, depth_image)
-        # depth_image_inverted_bg = np.where(depth_image_inverted==depth_image_max, 0, depth_image_inverted)
         depth_image_exp = np.exp(-depth_image)
         depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
         # バイキュービック補完によるダウンサンプリング

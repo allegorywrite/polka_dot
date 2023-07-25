@@ -30,7 +30,7 @@ if __name__ == '__main__':
     weight_decay = 0.0 # 重み減衰
     kld_weight = 0.00025 # KLDの重み
     manual_seed: 1265 # 乱数シード
-    epochs = 50 # エポック数
+    epochs = 5 # エポック数
     average_loss_array = [] # 平均損失の記録用配列
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/output.png")
@@ -86,6 +86,9 @@ if __name__ == '__main__':
     plt.yscale("log")
     plt.savefig(output_dir)
     plt.clf()
+
+    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/model.pth")
+    torch.save(model.state_dict(), model_save_path)
 
     # model.eval()
     # test_loss = 0

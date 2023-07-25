@@ -316,13 +316,12 @@ class CustomDataset:
 		# vis.run()
 		depth_image = vis.capture_depth_float_buffer(do_render=True)
 		depth_image = np.array(depth_image)
-		depth_image_max = np.max(depth_image)
-		depth_image_inverted = np.subtract(depth_image_max, depth_image)
-		depth_image_inverted_bg = np.where(depth_image_inverted==depth_image_max, 0, depth_image_inverted)
+		depth_image_exp = np.exp(-depth_image)
+		depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
 		# 最大値によるダウンサンプリング
-		# downsampled_image = self.downsample_max(depth_image_inverted_bg, self.downsampling_factor)
+		# downsampled_image = self.downsample_max(depth_image_exp_bg, self.downsampling_factor)
 		# バイキュービック補完によるダウンサンプリング
-		downsampled_image = resize(depth_image_inverted_bg, self.target_dim)
+		downsampled_image = resize(depth_image_exp_bg, self.target_dim)
 		vis.remove_geometry(global_map_base_pc)
 		vis.destroy_window()
 
@@ -425,7 +424,7 @@ class CustomDataset:
 		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
 
-	def make_loader(self, dataset, shuffle=True, name=None):
+	def save_data(self, dataset, shuffle=True, name=None):
 		if shuffle:
 			random.shuffle(dataset)
 		dataset_dict = dict()
@@ -461,9 +460,9 @@ class CustomDataset:
 				if len_case > self.data_num_max:
 					break
 				if np.random.uniform(0, 1) <= self.test_train_ratio:
-						self.train_dataset.extend(dataset)
-					else:
-						self.test_dataset.extend(dataset)
+					self.train_dataset.extend(dataset)
+				else:
+					self.test_dataset.extend(dataset)
 		print('Total Training Dataset Size: ',len(self.train_dataset))
 		print('Total Test Dataset Size: ',len(self.test_dataset))
 
