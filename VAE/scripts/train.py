@@ -1,6 +1,6 @@
-from models.dataset import CustomDataset
+from VAE.models.dataset import CustomDataset
 # from models.vae import Encoder, Decoder, Model
-from models.vanilla_vae import VanillaVAE
+from VAE.models.vanilla_vae import VanillaVAE
 from torchvision import transforms
 import torch
 import open3d as o3d
