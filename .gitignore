@@ -2,6 +2,4 @@
 !/data/training/**/
 !/data/training/**/.gitkeep
 /VAE/data/**
-/VAE/output/**
 !/VAE/data/**/.gitkeep
-!/VAE/output/**/.gitkeep
