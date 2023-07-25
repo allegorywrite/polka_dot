@@ -1,6 +1,6 @@
-from models.dataset import CustomDataset
+from VAE.models.dataset import CustomDataset
 # from models.vae import Encoder, Decoder, Model
-from models.vanilla_vae import VanillaVAE
+from VAE.models.vanilla_vae import VanillaVAE
 from torchvision import transforms
 import torch
 import open3d as o3d
@@ -67,18 +67,6 @@ if __name__ == '__main__':
 
         print("\tEpoch", epoch + 1, "complete!", "\tData Size: ", batch_idx*batch_size, "\tAverage Loss: ", overall_loss / (batch_idx*batch_size))
     print("Finish!!")
-
-    # model.eval()
-    # test_loss = 0
-    # with torch.no_grad():
-    #     for batch_id, batch in enumerate(test_loader):
-    #         real_img, labels = batch
-    #         self.curr_device = real_img.device
-    #         results = self.forward(real_img, labels = labels)
-    #         test_loss += self.model.loss_function(*results,
-    #             M_N = kld_weight,
-    #             optimizer_idx=optimizer_idx,
-    #             batch_idx = batch_idx)
 
     print("Start testing VAE...")
     model.eval()

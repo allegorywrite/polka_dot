@@ -21,6 +21,8 @@ from skimage.transform import resize
 
 sys.path.append(str(Path(__file__).parent.parent))
 
+# dataset will be array of 
+# [neighbor_num ∈ N, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action ∈ R^3]
 class CustomDataset:
 	def __init__(self, drone_num, visualize=False):
 		# if torch.cuda.is_available():
@@ -43,7 +45,7 @@ class CustomDataset:
 		self.camera_width = 640
 		self.camera_height = 360
 		self.downsampling_factor = 1
-		self.target_dim = (180, 320)
+		self.target_dim = (128, 128)
 
 		self.sencing_radius = 3
 		self.test_train_ratio = 0.9
@@ -412,15 +414,15 @@ class CustomDataset:
 				# TODO 未検証
 				depth_data = self.get_local_observation(global_map_base_pc)
 				data = [int(neighbor_state_local_array.shape[0]/2), goal_local, v_i_local, neighbor_state_local_array, depth_data, p_next_local]
-				# print("data = {}".format(depth_data))
+				print("data = {}".format(depth_data))
 				dataset.append(data)
 
-			if(self.visualize and t > 10):
+			if(self.visualize and t > 160):
 				self.visualize = False
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
 				self.visualize_data(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world)
 		# データセットの作成(TODO)
-		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(180×320), action]
+		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
 
 	def make_loader(self, dataset, shuffle=True, name=None):
@@ -459,9 +461,9 @@ class CustomDataset:
 				if len_case > self.data_num_max:
 					break
 				if np.random.uniform(0, 1) <= self.test_train_ratio:
-					self.train_dataset.extend(dataset)
-				else:
-					self.test_dataset.extend(dataset)
+						self.train_dataset.extend(dataset)
+					else:
+						self.test_dataset.extend(dataset)
 		print('Total Training Dataset Size: ',len(self.train_dataset))
 		print('Total Test Dataset Size: ',len(self.test_dataset))
 
@@ -474,5 +476,5 @@ if __name__ == '__main__':
   parser.add_argument("--visualize", action="store_true")
   parser.add_argument("--drone_num", type=int, default=3)
   args = parser.parse_args()
-  analyzer = CustomDataset(args.drone_num, args.visualize)
-  analyzer.load_data()
+  dataset = CustomDataset(args.drone_num, args.visualize)
+  dataset.load_data()
