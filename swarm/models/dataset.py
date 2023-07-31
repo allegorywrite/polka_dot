@@ -32,7 +32,7 @@ class CustomDataset:
 		# print("Initializing CustomDataset on {}...".format(self.device))
 		self.drones_num = drone_num
 		self.dim_per_drone = 14
-		self.replay_dir = "../data/training/replay/agents{}_*.csv".format(self.drones_num)
+		self.replay_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/training/replay/agents{}_*.csv".format(self.drones_num))
 		self.train_dataset = []
 		self.test_dataset = []
 		self.visualize = visualize
@@ -48,12 +48,12 @@ class CustomDataset:
 		self.target_dim = (128, 128)
 
 		self.sencing_radius = 3
-		self.test_train_ratio = 0.9
+		self.test_train_ratio = 0.8
 
 	# get [ State Observation Action ]
-	def getSOA_of_world(self, replay_data, map_data, local_map_world_pc, t, agent_id):
+	def getSOA_of_world(self, replay_data, map_data, t, agent_id):
 		# # Observation(World座標型)
-		local_map_world_array = np.asarray(local_map_world_pc.points)
+		# local_map_world_array = np.asarray(local_map_world_pc.points)
 		# State(World座標型)
 		t_i = replay_data[t,self.dim_per_drone*agent_id]
 		goal_i = map_data["agents"][agent_id]["goal"]
@@ -80,7 +80,7 @@ class CustomDataset:
 		# Action(World座標型)
 		p_next = np.array(
 			replay_data[t+1,self.dim_per_drone*agent_id+1:self.dim_per_drone*agent_id+4])
-		return p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, local_map_world_array
+		return p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next
 
 	def pointcloud_to_depth(self, point_cloud_data):
 		# point_cloud = np.asarray(point_cloud_data.points)
@@ -121,7 +121,7 @@ class CustomDataset:
 		depth_data = np.zeros((1,1))
 		return depth_data
 	
-	def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, global_map_world_array, local_map_world_array):
+	def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, global_map_world_array):
 		# Observation(Local座標型)
 		R_inverse_iw = quaternion.as_rotation_matrix(q_i_world.conjugate())
 		euler_iw = quaternion.as_euler_angles(q_i_world.conjugate())
@@ -133,12 +133,12 @@ class CustomDataset:
 		# 	mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
 		# 	size=0.6, origin=[0, 0, 0])
 		# 	o3d.visualization.draw_geometries([global_map_base_pc, mesh_frame])
-		local_map_world_pc = o3d.geometry.PointCloud()
-		local_map_world_pc.points = o3d.utility.Vector3dVector(local_map_world_array)
-		local_map_world_pc.translate(-p_i_world)
-		local_map_world_pc.rotate(R_inverse_iw, center=(0,0,0))
-		local_map_base_depth = self.pointcloud_to_depth(local_map_world_pc)
-		local_map_base_array = np.asarray(local_map_world_pc.points)
+		# local_map_world_pc = o3d.geometry.PointCloud()
+		# local_map_world_pc.points = o3d.utility.Vector3dVector(local_map_world_array)
+		# local_map_world_pc.translate(-p_i_world)
+		# local_map_world_pc.rotate(R_inverse_iw, center=(0,0,0))
+		# local_map_base_depth = self.pointcloud_to_depth(local_map_world_pc)
+		# local_map_base_array = np.asarray(local_map_world_pc.points)
 		# Action(Local座標型)
 		p_next_local = np.dot(R_inverse_iw, p_next - p_i_world)
 		# State(Local座標型)
@@ -166,7 +166,7 @@ class CustomDataset:
 				# 相対速度で計算する場合
 				# v_ij_local = np.dot(R_inverse_iw, v_j_world - v_i_world) + np.cross(w_i_world, p_ij_local)
 				neighbor_states = np.concatenate((neighbor_states, p_ij_local.reshape(1,-1), v_ij_local.reshape(1,-1)), axis=0)
-		return neighbor_states, v_i_local, goal_i_local, p_next_local, local_map_base_array, global_map_base_pc, local_map_base_depth
+		return neighbor_states, v_i_local, goal_i_local, p_next_local, global_map_base_pc
 
 	def get_cross_prod_mat(self, pVec_Arr):
 		# pVec_Arr shape (3)
@@ -384,6 +384,8 @@ class CustomDataset:
 
 	def generate_dataset(self, replay_file, visualize=False):
 		dataset = []
+		local_map_base_array = []
+		local_map_base_depth = []
 		# リプレイデータの読み込み
 		df = pd.read_csv(replay_file, header=None)
 		replay_data = df.to_numpy()
@@ -396,24 +398,25 @@ class CustomDataset:
 		global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 		global_map_world_array = np.asarray(global_map_world_pc.points)
 		for t in range(0, replay_data.shape[0]-1):
+			if t % 1 == 0:
+				print("t = {}".format(t))
 			observation_world_array = []
 			if replay_data[t,0] == 0:
 				self.t_start = t + 1
 				continue
 			for agent_id in range(0, self.drones_num):
 				# 点群の読み込み
-				vision_file_path = "{}/../vision/{}.pcd_agent{}_timestep{}.pcd".format(os.path.dirname(replay_file), basename_without_ext, agent_id, t)
-				local_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
+				# vision_file_path = "{}/../vision/{}.pcd_agent{}_timestep{}.pcd".format(os.path.dirname(replay_file), basename_without_ext, agent_id, t)
+				# local_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 				# State, Observation, Actionの取得
-				p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, local_map_world_array = self.getSOA_of_world(replay_data, map_data, local_map_world_pc, t, agent_id)
-				observation_world_array.append(local_map_world_array)
+				p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next = self.getSOA_of_world(replay_data, map_data, t, agent_id)
+				# observation_world_array.append(local_map_world_array)
 				# ベース座標系に変換
-				neighbor_state_local_array, v_i_local, goal_local, p_next_local, local_map_base_array, global_map_base_pc, local_map_base_depth = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, global_map_world_array, local_map_world_array)
+				neighbor_state_local_array, v_i_local, goal_local, p_next_local, global_map_base_pc = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, global_map_world_array)
 
 				# TODO 未検証
 				depth_data = self.get_local_observation(global_map_base_pc)
 				data = [int(neighbor_state_local_array.shape[0]/2), goal_local, v_i_local, neighbor_state_local_array, depth_data, p_next_local]
-				print("data = {}".format(depth_data))
 				dataset.append(data)
 
 			if(self.visualize and t > 160):
@@ -424,7 +427,7 @@ class CustomDataset:
 		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
 
-	def save_data(self, dataset, shuffle=True, name=None):
+	def generate_dict(self, dataset, shuffle=True, name=None):
 		if shuffle:
 			random.shuffle(dataset)
 		dataset_dict = dict()
@@ -436,14 +439,34 @@ class CustomDataset:
 			dataset_dict[neighbor_num].append(data)
 
 		loader = []
+		print("keys:",dataset_dict.keys())
 		for key in dataset_dict.keys():
 			dataset = dataset_dict[key]
-			preprocessed_data = np.array(dataset)
-			data_dir = os.path.expanduser("~/polka_dot/data/training/preprocessed_data/batch_{}_nn{}.npy".format(name, key))
+			preprocessed_data = np.array(dataset, dtype=object)
+			data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}.npy".format(name, key))
 			os.makedirs(os.path.dirname(data_dir), exist_ok=True)
 			np.save(data_dir, preprocessed_data)
+		
+		return dataset_dict
 
-	def load_data(self):
+	def load_dict(self, name=None):
+		dataset_dict = dict()
+		for key in range(0, self.drones_num):
+			data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}.npy".format(name, key))
+			if not os.path.exists(data_dir):
+				print("Error: {} does not exist.".format(data_dir))
+				continue
+			dataset_dict[key] = np.load(data_dir, allow_pickle=True)
+		return dataset_dict
+		
+	def load_data(self, load=False):
+		if load:
+			print("Loading preprocessed data...")
+			dataset_dict_train = self.load_dict(name="train")
+			# dataset_dict_test = self.load_dict(name="test")
+			dataset_dict_test = None
+			return dataset_dict_train, dataset_dict_test
+
 		print("Loading Data...")
 		files = glob.glob(self.replay_dir)
 		print("Size of files: ", len(files))
@@ -466,14 +489,15 @@ class CustomDataset:
 		print('Total Training Dataset Size: ',len(self.train_dataset))
 		print('Total Test Dataset Size: ',len(self.test_dataset))
 
-		self.save_data(self.train_dataset, name="train", shuffle=True)
-		self.save_data(self.test_dataset, name="test", shuffle=True)
-		return self.train_dataset, self.test_dataset
+		dataset_dict_train = self.generate_dict(self.train_dataset, name="train", shuffle=True)
+		dataset_dict_test = self.generate_dict(self.test_dataset, name="test", shuffle=True)
+		return dataset_dict_train, dataset_dict_test
 
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument("--visualize", action="store_true")
-  parser.add_argument("--drone_num", type=int, default=3)
-  args = parser.parse_args()
-  dataset = CustomDataset(args.drone_num, args.visualize)
-  dataset.load_data()
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--visualize", action="store_true")
+	parser.add_argument("--load", action="store_true")
+	parser.add_argument("--drone_num", type=int, default=3)
+	args = parser.parse_args()
+	dataset = CustomDataset(args.drone_num, args.visualize)
+	dataset.load_data(args.load)
