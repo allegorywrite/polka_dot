@@ -11,15 +11,19 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from torch import optim, nn
 import os
+import argparse
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load", action="store_true")
+    args = parser.parse_args()
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
 
-    image_num_train = 80000
+    image_num_train = 110000
     image_num_test = 100
     batch_size = 100 # バッチサイズ
     hidden_dims = [32, 64, 128, 256, 512] # 隠れ層の次元数
@@ -30,7 +34,7 @@ if __name__ == '__main__':
     weight_decay = 0.0 # 重み減衰
     kld_weight = 0.00025 # KLDの重み
     manual_seed: 1265 # 乱数シード
-    epochs = 5 # エポック数
+    epochs = 30 # エポック数
     average_loss_array = [] # 平均損失の記録用配列
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/output.png")
@@ -45,50 +49,53 @@ if __name__ == '__main__':
     # depth_data = train_dataset.get_local_observation(global_map_world_pc)
     # plt.imshow(depth_data, cmap="plasma")
     # plt.show()
+    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/model.pth")
 
     model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim).to(device)
 
-    optimizer = optim.Adam(model.parameters(),lr=lr,weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer,gamma = scheduler_gamma)
+    if args.load:
+        model.load_state_dict(torch.load(model_save_path))
+    else:
+        optimizer = optim.Adam(model.parameters(),lr=lr,weight_decay=weight_decay)
+        scheduler = optim.lr_scheduler.ExponentialLR(optimizer,gamma = scheduler_gamma)
 
-    print("Start training VAE...")
-    model.train()
+        print("Start training VAE...")
+        model.train()
 
-    for epoch in range(epochs):
-        overall_loss = 0
-        for batch_idx, batch in enumerate(train_loader):
-            real_img, labels = batch
-            real_img, labels = real_img.to(device), labels.to(device)
-            optimizer.zero_grad()
+        for epoch in range(epochs):
+            overall_loss = 0
+            for batch_idx, batch in enumerate(train_loader):
+                real_img, labels = batch
+                real_img, labels = real_img.to(device), labels.to(device)
+                optimizer.zero_grad()
 
-            results = model.forward(real_img, labels = labels)
-            train_losses = model.loss_function(*results,
-                M_N = kld_weight,
-                batch_idx = batch_idx)
-            train_loss = train_losses["loss"]
-            train_loss.backward()
-            optimizer.step()
-            overall_loss += train_loss.item()
-        scheduler.step()
+                results = model.forward(real_img, labels = labels)
+                train_losses = model.loss_function(*results,
+                    M_N = kld_weight,
+                    batch_idx = batch_idx)
+                train_loss = train_losses["loss"]
+                train_loss.backward()
+                optimizer.step()
+                overall_loss += train_loss.item()
+            scheduler.step()
 
-        average_loss_array.append(overall_loss / (batch_idx*batch_size))
+            average_loss_array.append(overall_loss / (batch_idx*batch_size))
 
-        print("\tEpoch", epoch + 1, "complete!", "\tData Size: ", batch_idx*batch_size, "\tAverage Loss: ", overall_loss / (batch_idx*batch_size))
-    print("Finish!!")
+            print("\tEpoch", epoch + 1, "complete!", "\tData Size: ", batch_idx*batch_size, "\tAverage Loss: ", overall_loss / (batch_idx*batch_size))
+        print("Finish!!")
 
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/loss.png")
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/loss.png")
 
-    # 損失を対数グラフで保存してclear
-    plt.plot(average_loss_array)
-    plt.xlabel("Epoch")
-    plt.xlim(0, epochs)
-    plt.ylabel("Loss")
-    plt.yscale("log")
-    plt.savefig(output_dir)
-    plt.clf()
+        # 損失を対数グラフで保存してclear
+        plt.plot(average_loss_array)
+        plt.xlabel("Epoch")
+        plt.xlim(0, epochs)
+        plt.ylabel("Loss")
+        plt.yscale("log")
+        plt.savefig(output_dir)
+        plt.clf()
 
-    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/model.pth")
-    torch.save(model.state_dict(), model_save_path)
+        torch.save(model.state_dict(), model_save_path)
 
     # model.eval()
     # test_loss = 0
@@ -122,7 +129,7 @@ if __name__ == '__main__':
     fig, ax = plt.subplots(n_samples, 2)
     with torch.no_grad():
         for i in range(n_samples):
-            test_img, labels = test_dataset[i]
+            test_img, labels = train_dataset[i+10]
             test_img = test_img.unsqueeze(0).to(device)
 
             labels = labels.unsqueeze(0).to(device)

@@ -36,13 +36,15 @@ class CustomDataset(Dataset):
         return image
         
     def generateImage(self, idx):
-        if idx/self.num_images*100 % 10 == 0:
-            print("Generate Image: {}%".format(int(idx/self.num_images*100)))
         self.image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data/image_{}.png".format(idx))
         if os.path.exists(self.image_dir):
+            if idx/self.num_images*100 % 10 == 0:
+                print("Load Image: {}%".format(int(idx/self.num_images*100)))
             image = self.load_image(self.image_dir)
             return image
         else:
+            if idx/self.num_images*100 % 10 == 0:
+                print("Generate Image: {}%".format(int(idx/self.num_images*100)))
             image = self.get_local_observation(self.map_pcd)
             self.save_image(self.image_dir, image)
             return image

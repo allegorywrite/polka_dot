@@ -27,7 +27,7 @@ class VanillaVAE(BaseVAE):
             modules.append(
                 nn.Sequential(
                     nn.Conv2d(in_channels, out_channels=h_dim,
-                              kernel_size= 3, stride= 2, padding  = 1),
+                              kernel_size= 10, stride= 2, padding  = 4),
                     nn.BatchNorm2d(h_dim),
                     nn.LeakyReLU())
             )
