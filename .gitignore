@@ -1,5 +1,12 @@
 /data/training/**
+/data/preprocessed_data/**
 !/data/training/**/
 !/data/training/**/.gitkeep
+!/data/preprocessed_data/.gitkeep
 /VAE/data/**
 !/VAE/data/**/.gitkeep
+
+files/logs/*.npy
+files/videos/*.mp4
+results/
+tmp/

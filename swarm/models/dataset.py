@@ -24,13 +24,16 @@ sys.path.append(str(Path(__file__).parent.parent))
 # dataset will be array of 
 # [neighbor_num ∈ N, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action ∈ R^3]
 class CustomDataset:
-	def __init__(self, drone_num, visualize=False):
+	def __init__(self, visualize=False):
 		# if torch.cuda.is_available():
 		#   self.device = torch.device('cuda')
 		# else:
 		#   self.device = torch.device('cpu')
 		# print("Initializing CustomDataset on {}...".format(self.device))
-		self.drones_num = drone_num
+		yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/params.yaml")
+		with open(yaml_path, 'r') as f:
+			params = yaml.load(f, Loader=yaml.SafeLoader)
+		self.drones_num = params["env"]["num_drones"]
 		self.dim_per_drone = 14
 		self.replay_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/training/replay/agents{}_*.csv".format(self.drones_num))
 		self.train_dataset = []
@@ -38,17 +41,20 @@ class CustomDataset:
 		self.visualize = visualize
 		self.data_num_max = 100000
 		self.t_start = 0
-		self.goal_horizon = 8
+		self.goal_horizon = params["env"]["goal_horizon"]
 		self.use_open3d = True
 		self.use_matplotlib = False
 
-		self.camera_width = 640
-		self.camera_height = 360
+		self.camera_width = params["env"]["camera_width"]
+		self.camera_height = params["env"]["camera_height"]
 		self.downsampling_factor = 1
-		self.target_dim = (128, 128)
+		self.target_dim = params["vae"]["image_size"]
+		self.max_vel = params["env"]["max_vel"]
 
-		self.sencing_radius = 3
+		self.sencing_radius = params["env"]["sencing_radius"]
 		self.test_train_ratio = 0.8
+
+		self.depth_data_log = [[] for _ in range(self.drones_num)]
 
 	# get [ State Observation Action ]
 	def getSOA_of_world(self, replay_data, map_data, t, agent_id):
@@ -60,27 +66,40 @@ class CustomDataset:
 		p_i_world = np.array(
 			replay_data[t,self.dim_per_drone*agent_id+1:self.dim_per_drone*agent_id+4])
 		# S = [ p, q, v, w ] の場合
-		# q_i_world = np.quaternion(
-		# 	replay_data[t,self.dim_per_drone*agent_id+4], 
-		# 	replay_data[t,self.dim_per_drone*agent_id+5], 
-		# 	replay_data[t,self.dim_per_drone*agent_id+6], 
-		# 	replay_data[t,self.dim_per_drone*agent_id+7])
 		q_i_world = np.quaternion(
-			replay_data[t,self.dim_per_drone*agent_id+7], 
-			replay_data[t,self.dim_per_drone*agent_id+8], 
-			replay_data[t,self.dim_per_drone*agent_id+9], 
-			replay_data[t,self.dim_per_drone*agent_id+10])
-		v_i_world = np.array(
-			replay_data[t,self.dim_per_drone*agent_id+4:self.dim_per_drone*agent_id+7])
+			replay_data[t,self.dim_per_drone*agent_id+4], 
+			replay_data[t,self.dim_per_drone*agent_id+5], 
+			replay_data[t,self.dim_per_drone*agent_id+6], 
+			replay_data[t,self.dim_per_drone*agent_id+7])
+		# S = [ p, v, q, w ] の場合
+		# q_i_world = np.quaternion(
+		# 	replay_data[t,self.dim_per_drone*agent_id+7], 
+		# 	replay_data[t,self.dim_per_drone*agent_id+8], 
+		# 	replay_data[t,self.dim_per_drone*agent_id+9], 
+		# 	replay_data[t,self.dim_per_drone*agent_id+10])
 		# S = [ p, q, v, w ] の場合
+		v_i_world = np.array(
+			replay_data[t,self.dim_per_drone*agent_id+8:self.dim_per_drone*agent_id+11])
+		# S = [ p, v, q, w ] の場合
 		# v_i_world = np.array(
-		# 	replay_data[t,self.dim_per_drone*agent_id+8:self.dim_per_drone*agent_id+11])
+		# 	replay_data[t,self.dim_per_drone*agent_id+4:self.dim_per_drone*agent_id+7])
 		w_i_world = np.array(
 			replay_data[t,self.dim_per_drone*agent_id+11:self.dim_per_drone*agent_id+14])
 		# Action(World座標型)
 		p_next = np.array(
 			replay_data[t+1,self.dim_per_drone*agent_id+1:self.dim_per_drone*agent_id+4])
-		return p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next
+		q_next = np.quaternion(
+			replay_data[t+1,self.dim_per_drone*agent_id+4],
+			replay_data[t+1,self.dim_per_drone*agent_id+5],
+			replay_data[t+1,self.dim_per_drone*agent_id+6],
+			replay_data[t+1,self.dim_per_drone*agent_id+7])
+		# S = [ p, v, q, w ] の場合
+		# q_next = np.quaternion(
+		# 	replay_data[t+1,self.dim_per_drone*agent_id+7],
+		# 	replay_data[t+1,self.dim_per_drone*agent_id+8],
+		# 	replay_data[t+1,self.dim_per_drone*agent_id+9],
+		# 	replay_data[t+1,self.dim_per_drone*agent_id+10])
+		return p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next
 
 	def pointcloud_to_depth(self, point_cloud_data):
 		# point_cloud = np.asarray(point_cloud_data.points)
@@ -121,14 +140,16 @@ class CustomDataset:
 		depth_data = np.zeros((1,1))
 		return depth_data
 	
-	def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, global_map_world_array):
+	def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next, global_map_world_array):
 		# Observation(Local座標型)
 		R_inverse_iw = quaternion.as_rotation_matrix(q_i_world.conjugate())
 		euler_iw = quaternion.as_euler_angles(q_i_world.conjugate())
-		global_map_base_pc = o3d.geometry.PointCloud()
-		global_map_base_pc.points = o3d.utility.Vector3dVector(global_map_world_array)
-		global_map_base_pc.translate(-p_i_world)
-		global_map_base_pc.rotate(R_inverse_iw, center=(0,0,0))
+		global_map_base_pc = None
+		if self.visualize:
+			global_map_base_pc = o3d.geometry.PointCloud()
+			global_map_base_pc.points = o3d.utility.Vector3dVector(global_map_world_array)
+			global_map_base_pc.translate(-p_i_world)
+			global_map_base_pc.rotate(R_inverse_iw, center=(0,0,0))
 		# if t % 10 == 0:
 		# 	mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
 		# 	size=0.6, origin=[0, 0, 0])
@@ -140,7 +161,15 @@ class CustomDataset:
 		# local_map_base_depth = self.pointcloud_to_depth(local_map_world_pc)
 		# local_map_base_array = np.asarray(local_map_world_pc.points)
 		# Action(Local座標型)
-		p_next_local = np.dot(R_inverse_iw, p_next - p_i_world)
+		# 差分から計算する場合
+		action_liner = np.dot(R_inverse_iw, p_next - p_i_world)
+		# 速度から計算する場合
+		# action_liner = np.dot(R_inverse_iw, v_i_world)
+		yaw_rate = np.dot(R_inverse_iw, w_i_world)[2]
+		clipped_speed = np.clip(np.linalg.norm(action_liner), 0, self.max_vel)
+		normalized_speed = clipped_speed / self.max_vel
+		action = np.array([action_liner[0], action_liner[1], action_liner[2], normalized_speed, yaw_rate])
+		
 		# State(Local座標型)
 		v_i_local = np.dot(R_inverse_iw, v_i_world)
 		goal_i_local = np.dot(R_inverse_iw, goal_i - p_i_world)
@@ -156,18 +185,35 @@ class CustomDataset:
 				if neighbor_distance > self.sencing_radius:
 					continue
 				# S = [ p, q, v, w ] の場合
-				# v_j_world = np.array(
-				# 	replay_data[t,self.dim_per_drone*neighbor_id+8:self.dim_per_drone*neighbor_id+11])
 				v_j_world = np.array(
-					replay_data[t,self.dim_per_drone*neighbor_id+4:self.dim_per_drone*neighbor_id+7])
+					replay_data[t,self.dim_per_drone*neighbor_id+8:self.dim_per_drone*neighbor_id+11])
+				# S = [ p, v, q, w ] の場合
+				# v_j_world = np.array(
+				# 	replay_data[t,self.dim_per_drone*neighbor_id+4:self.dim_per_drone*neighbor_id+7])
 				# Neighbor State(Local座標型)
 				p_ij_local = np.dot(R_inverse_iw, p_j_world - p_i_world)
 				v_ij_local = np.dot(R_inverse_iw, v_j_world)
 				# 相対速度で計算する場合
 				# v_ij_local = np.dot(R_inverse_iw, v_j_world - v_i_world) + np.cross(w_i_world, p_ij_local)
 				neighbor_states = np.concatenate((neighbor_states, p_ij_local.reshape(1,-1), v_ij_local.reshape(1,-1)), axis=0)
-		return neighbor_states, v_i_local, goal_i_local, p_next_local, global_map_base_pc
+		return neighbor_states, v_i_local, goal_i_local, action, global_map_base_pc
+	
+	def clip_and_normlize(self, neighbor_state_local_array, v_i_local, goal_local):
+		for i in range(0, int(neighbor_state_local_array.shape[0]/2)):
+			p = neighbor_state_local_array[i*2]
+			v = neighbor_state_local_array[i*2+1]
+			cliped_p = np.clip(p, -self.sencing_radius, self.sencing_radius)
+			clipec_v = np.clip(v, -self.max_vel, self.max_vel)
+			normalized_p = cliped_p / self.sencing_radius
+			normalized_v = clipec_v / self.max_vel
+			neighbor_state_local_array[i*2] = normalized_p
+			neighbor_state_local_array[i*2+1] = normalized_v
+		cliped_v_i_local = np.clip(v_i_local, -self.max_vel, self.max_vel)
+		normalized_v_i_local = cliped_v_i_local / self.max_vel
+		normalized_goal_local = goal_local / self.goal_horizon
 
+		return neighbor_state_local_array, normalized_v_i_local, normalized_goal_local
+	
 	def get_cross_prod_mat(self, pVec_Arr):
 		# pVec_Arr shape (3)
 		qCross_prod_mat = np.array([
@@ -223,7 +269,7 @@ class CustomDataset:
 		mesh_sphere_begin.paint_uniform_color(color)
 		return mesh_arrow, mesh_sphere_begin
 
-	def visualize_matplotlib(self, replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world):
+	def visualize_matplotlib(self, replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, q_i_world):
 		# ワールド座標系
 		fig = plt.figure()
 		ax = fig.add_subplot(111, projection="3d")
@@ -281,7 +327,7 @@ class CustomDataset:
 		# ax2.quiver(0, 0, 0, orientation[0], orientation[1], orientation[2], 
 		# 							color="red", length=1.0, normalize=True)
 		# Actionの描画
-		ax2.quiver(0, 0, 0, p_next_local[0], p_next_local[1], p_next_local[2], 
+		ax2.quiver(0, 0, 0, action[0], action[1], action[2], 
 									color="black", length=1.0, normalize=True)
 		# Depthの描画
 		# fig3 = plt.figure()
@@ -298,20 +344,28 @@ class CustomDataset:
 				result[index] = np.max(image[slices])
 		return result
 
-	def get_local_observation(self, global_map_base_pc):
+	def get_local_observation(self, global_map_world_pc, p_i_world, q_i_world):
 		# Create a visualization window
 		vis = o3d.visualization.Visualizer()
-		vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=False)
+		# デプス画像が上手く表示されない場合は、visible=Trueにする
+		vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
 		render_option = vis.get_render_option()  
 		render_option.point_size = 10.0
-		vis.add_geometry(global_map_base_pc)
+		vis.add_geometry(global_map_world_pc)
 		view_control = vis.get_view_control()
 		intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
-		rot = np.eye(4)
-		rot[:3,:3] = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
+		
+		# カメラの姿勢を設定
+		rot_1 = np.eye(4)
+		rot_2 = np.eye(4)
+		attitude = quaternion.as_rotation_matrix(q_i_world)
+		rot_1[:3, 3] = - p_i_world
+		align_mat = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
+		rot_2[:3,:3] = np.dot(attitude, align_mat)
 		pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
 		pinhole_parameters.intrinsic = intrinsic
-		pinhole_parameters.extrinsic = rot
+		pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
+
 		view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
 		# vis.run()
 		depth_image = vis.capture_depth_float_buffer(do_render=True)
@@ -327,9 +381,9 @@ class CustomDataset:
 
 		return downsampled_image
 	
-	def visualize_open3d(self, replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world):
+	def visualize_open3d(self, replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, q_i_world):
 		# open3dで描画
-		agent_arrow, _ = self.create_arrow(begin=[0,0,0], end=p_next_local, color=[0,0,0], normalized=True)
+		agent_arrow, _ = self.create_arrow(begin=[0,0,0], end=action, color=[0,0,0], normalized=True)
 		neighbor_arrow_list = []
 		for agent_id in range(0, int(neighbor_state_local_array.shape[0]/2)):
 			neighbor_pos = neighbor_state_local_array[agent_id*2] # x, y, z
@@ -344,8 +398,7 @@ class CustomDataset:
 		render_option = vis.get_render_option()  
 		render_option.point_size = 10.0
 
-		origin_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
-    size=0.6, origin=[0, 0, 0])
+		origin_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
 		vis.add_geometry(global_map_base_pc)
 		vis.add_geometry(origin_frame)
 		vis.add_geometry(agent_arrow)
@@ -376,11 +429,23 @@ class CustomDataset:
 		plt.imshow(downsampled_image, cmap='plasma')
 		plt.show()
 
-	def visualize_data(self, replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world):
+	def visualize_data(self, replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, q_i_world, depth_data_log):
 		if(self.use_open3d):
-			self.visualize_open3d(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world)
+			self.visualize_open3d(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, q_i_world)
 		if(self.use_matplotlib):
-			self.visualize_matplotlib(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world)
+			self.visualize_matplotlib(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, q_i_world)
+		# additional visualization
+		sample_lens = 10
+		sample_drones = 2
+		if(len(depth_data_log[0]) > sample_lens):
+			fig, ax = plt.subplots(sample_lens, sample_drones)
+			for i in range(sample_drones):
+				ax[0,i].set_title("drone {}".format(i))
+				ax[0,i].axis('off')
+				for j in range(sample_lens):
+					ax[j,i].imshow(depth_data_log[i][j], cmap='plasma')
+			plt.show()
+
 
 	def generate_dataset(self, replay_file, visualize=False):
 		dataset = []
@@ -398,7 +463,7 @@ class CustomDataset:
 		global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 		global_map_world_array = np.asarray(global_map_world_pc.points)
 		for t in range(0, replay_data.shape[0]-1):
-			if t % 1 == 0:
+			if t % 10 == 0:
 				print("t = {}".format(t))
 			observation_world_array = []
 			if replay_data[t,0] == 0:
@@ -409,20 +474,23 @@ class CustomDataset:
 				# vision_file_path = "{}/../vision/{}.pcd_agent{}_timestep{}.pcd".format(os.path.dirname(replay_file), basename_without_ext, agent_id, t)
 				# local_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 				# State, Observation, Actionの取得
-				p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next = self.getSOA_of_world(replay_data, map_data, t, agent_id)
+				p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next = self.getSOA_of_world(replay_data, map_data, t, agent_id)
 				# observation_world_array.append(local_map_world_array)
 				# ベース座標系に変換
-				neighbor_state_local_array, v_i_local, goal_local, p_next_local, global_map_base_pc = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, global_map_world_array)
+				neighbor_state_local_array, v_i_local, goal_local, action, global_map_base_pc = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next, global_map_world_array)
+				normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local = self.clip_and_normlize(neighbor_state_local_array, v_i_local, goal_local)
 
 				# TODO 未検証
-				depth_data = self.get_local_observation(global_map_base_pc)
-				data = [int(neighbor_state_local_array.shape[0]/2), goal_local, v_i_local, neighbor_state_local_array, depth_data, p_next_local]
+				depth_data = self.get_local_observation(global_map_world_pc, p_i_world, q_i_world)
+				self.depth_data_log[agent_id].append(depth_data)
+
+				data = [int(normalized_neighbor_state_local_array.shape[0]/2), normalized_goal_local, normalized_v_i_local, neighbor_state_local_array, depth_data, action]
 				dataset.append(data)
 
-			if(self.visualize and t > 160):
+			if(self.visualize and t > 12):
 				self.visualize = False
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
-				self.visualize_data(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, p_next_local, t, q_i_world)
+				self.visualize_data(replay_data, observation_world_array, global_map_base_pc, local_map_base_array, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, q_i_world, self.depth_data_log)
 		# データセットの作成(TODO)
 		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
@@ -497,7 +565,6 @@ if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--visualize", action="store_true")
 	parser.add_argument("--load", action="store_true")
-	parser.add_argument("--drone_num", type=int, default=3)
 	args = parser.parse_args()
-	dataset = CustomDataset(args.drone_num, args.visualize)
+	dataset = CustomDataset(args.visualize)
 	dataset.load_data(args.load)

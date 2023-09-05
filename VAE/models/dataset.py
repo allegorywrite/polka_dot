@@ -9,18 +9,22 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 import glob
 import os
+import yaml
 
 class CustomDataset(Dataset):
     def __init__(self, num_images, map_pcd):
+        yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../swarm/config/params.yaml")
+        with open(yaml_path, 'r') as f:
+            params = yaml.load(f, Loader=yaml.SafeLoader)
         self.num_images = num_images
         self.images = []
         self.transform = transforms.Compose(
             [transforms.ToTensor(),
              transforms.Normalize((0.5,), (0.5,))])
-        self.camera_width = 640
-        self.camera_height = 360
+        self.camera_width = params["env"]["camera_width"]
+        self.camera_height = params["env"]["camera_height"]
         self.downsampling_factor = 1
-        self.target_dim = (128, 128)
+        self.target_dim = params["vae"]["image_size"]
         self.map_lower_bound = [-13.0, -10.0, 0.0]
         self.map_upper_bound = [13.0, 10.0, 1.0]
         self.map_pcd = map_pcd

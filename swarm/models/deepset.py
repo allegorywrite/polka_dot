@@ -19,10 +19,10 @@ class DeepSet(nn.Module):
 			nn.Linear(self.input_dim,64),
 			nn.Linear(64,64),
 			nn.Linear(64,16)])
-    rho_layers = nn.ModuleList([
-      nn.Linear(16,64),
-      nn.Linear(64,64),
-      nn.Linear(64,self.output_dim)])
+		rho_layers = nn.ModuleList([
+		nn.Linear(16,64),
+		nn.Linear(64,64),
+		nn.Linear(64,self.output_dim)])
 		activation = relu
 		
 		self.phi = FeedForward(phi_layers,activation)

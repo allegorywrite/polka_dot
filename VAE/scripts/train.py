@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch import optim, nn
 import os
 import argparse
+import yaml
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -23,18 +24,25 @@ if __name__ == '__main__':
     else:
         device = torch.device('cpu')
 
+    # yamlファイルの読み込み
+    yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../swarm/config/params.yaml")
+    with open(yaml_path, 'r') as f:
+        params = yaml.load(f)
+
     image_num_train = 110000
     image_num_test = 100
-    batch_size = 100 # バッチサイズ
-    hidden_dims = [32, 64, 128, 256, 512] # 隠れ層の次元数
-    latent_dim = 200 # 潜在変数の次元数
-    in_channels = 1 # 入力画像のチャンネル数(デプス画像は1)
-    lr = 0.005 # 学習率
-    scheduler_gamma = 0.95 # 学習率の減衰率
-    weight_decay = 0.0 # 重み減衰
-    kld_weight = 0.00025 # KLDの重み
-    manual_seed: 1265 # 乱数シード
     epochs = 30 # エポック数
+
+    batch_size = params["vae"]["batch_size"] # バッチサイズ
+    hidden_dims = params["vae"]["hidden_dims"] # 隠れ層の次元数
+    latent_dim = params["vae"]["latent_dim"] # 潜在変数の次元数
+    in_channels = params["vae"]["in_channels"] # 入力画像のチャンネル数(デプス画像は1)
+    lr = params["vae"]["lr"] # 学習率
+    scheduler_gamma = params["vae"]["scheduler_gamma"] # 学習率の減衰率
+    weight_decay = params["vae"]["weight_decay"] # 重み減衰
+    kld_weight = params["vae"]["kld_weight"] # KLDの重み
+    manual_seed = params["vae"]["manual_seed"] # 乱数シード
+    
     average_loss_array = [] # 平均損失の記録用配列
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/output.png")
