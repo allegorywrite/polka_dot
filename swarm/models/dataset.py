@@ -54,6 +54,7 @@ class CustomDataset:
 		self.test_train_ratio = 0.8
 
 		self.depth_data_log = [[] for _ in range(self.drones_num)]
+		self.o3d_vis = o3d.visualization.Visualizer()
 
 	# get [ State Observation Action ]
 	def getSOA_of_world(self, replay_data, map_data, t, agent_id):
@@ -271,6 +272,16 @@ class CustomDataset:
 				slices = tuple(slice(i*factor, (i+1)*factor) for i in index)
 				result[index] = np.max(image[slices])
 		return result
+	
+	def create_field(self, global_map_world_pc):
+		self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
+		render_option = self.o3d_vis.get_render_option()  
+		render_option.point_size = 10.0
+		self.o3d_vis.add_geometry(global_map_world_pc)
+	
+	def destroy_field(self, global_map_world_pc):
+		self.o3d_vis.remove_geometry(global_map_world_pc)
+		self.o3d_vis.destroy_window()
 
 	def get_local_observation(self, global_map_world_pc, p_i_world, q_i_world):
 		# Create a visualization window
@@ -282,14 +293,13 @@ class CustomDataset:
 		vis.add_geometry(global_map_world_pc)
 		view_control = vis.get_view_control()
 		intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
-		
-		# カメラの姿勢を設定
+
 		rot_1 = np.eye(4)
 		rot_2 = np.eye(4)
-		attitude = quaternion.as_rotation_matrix(q_i_world)
+		attitude = quaternion.as_rotation_matrix(q_i_world.conjugate())
 		rot_1[:3, 3] = - p_i_world
-		align_mat = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
-		rot_2[:3,:3] = np.dot(attitude, align_mat)
+		align_mat = np.dot(Rotation.from_euler('x', 90, degrees=True).as_matrix(), Rotation.from_euler('z', 90, degrees=True).as_matrix())
+		rot_2[:3,:3] = np.dot(align_mat, attitude)
 		pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
 		pinhole_parameters.intrinsic = intrinsic
 		pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
@@ -418,13 +428,6 @@ class CustomDataset:
 		pinhole_parameters.intrinsic = intrinsic
 		pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
 
-		# # カメラを原点に固定
-		# rot = np.eye(4)
-		# rot[:3,:3] = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
-		# pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
-		# pinhole_parameters.intrinsic = intrinsic
-		# pinhole_parameters.extrinsic = rot
-
 		view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)
 		vis.run()
 		depth_image = vis.capture_depth_float_buffer(do_render=True)
@@ -540,12 +543,12 @@ class CustomDataset:
 				neighbor_state_local_array, v_i_local, goal_local, action = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next)
 				normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local = self.clip_and_normlize(neighbor_state_local_array, v_i_local, goal_local)
 
-				# # TODO 未検証
-				# depth_data = self.get_local_observation(global_map_world_pc, p_i_world, q_i_world)
-				# self.depth_data_log[agent_id].append(depth_data)
+				# TODO 未検証
+				depth_data = self.get_local_observation(global_map_world_pc, p_i_world, q_i_world)
+				self.depth_data_log[agent_id].append(depth_data)
 
-				# data = [int(normalized_neighbor_state_local_array.shape[0]/2), normalized_goal_local, normalized_v_i_local, normalized_neighbor_state_local_array, depth_data, action]
-				# dataset.append(data)
+				data = [int(normalized_neighbor_state_local_array.shape[0]/2), normalized_goal_local, normalized_v_i_local, normalized_neighbor_state_local_array, depth_data, action]
+				dataset.append(data)
 			if(visualize and t > 20):
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
 				self.visualize_data(replay_data, global_map_world_pc, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, p_i_world, q_i_world, self.depth_data_log)
