@@ -54,7 +54,6 @@ class CustomDataset:
 		self.test_train_ratio = 0.8
 
 		self.depth_data_log = [[] for _ in range(self.drones_num)]
-		self.o3d_vis = o3d.visualization.Visualizer()
 
 	# get [ State Observation Action ]
 	def getSOA_of_world(self, replay_data, map_data, t, agent_id):
@@ -234,8 +233,7 @@ class CustomDataset:
 		elif np.dot(z_unit_Arr, pVec_Arr) == 1:   
 				qTrans_Mat = np.eye(3, 3)
 		else:
-				qTrans_Mat = np.eye(3, 3) + z_c_vec_mat + np.matmul(z_c_vec_mat,
-																										z_c_vec_mat)/(1 + np.dot(z_unit_Arr, pVec_Arr))
+				qTrans_Mat = np.eye(3, 3) + z_c_vec_mat + np.matmul(z_c_vec_mat, z_c_vec_mat)/(1 + np.dot(z_unit_Arr, pVec_Arr))
 
 		qTrans_Mat *= scale
 		return qTrans_Mat
@@ -274,6 +272,7 @@ class CustomDataset:
 		return result
 	
 	def create_field(self, global_map_world_pc):
+		self.o3d_vis = o3d.visualization.Visualizer()
 		self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
 		render_option = self.o3d_vis.get_render_option()  
 		render_option.point_size = 10.0
@@ -283,15 +282,8 @@ class CustomDataset:
 		self.o3d_vis.remove_geometry(global_map_world_pc)
 		self.o3d_vis.destroy_window()
 
-	def get_local_observation(self, global_map_world_pc, p_i_world, q_i_world):
-		# Create a visualization window
-		vis = o3d.visualization.Visualizer()
-		# デプス画像が上手く表示されない場合は、visible=Trueにする
-		vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
-		render_option = vis.get_render_option()  
-		render_option.point_size = 10.0
-		vis.add_geometry(global_map_world_pc)
-		view_control = vis.get_view_control()
+	def get_local_observation(self, p_i_world, q_i_world):
+		view_control = self.o3d_vis.get_view_control()
 		intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
 
 		rot_1 = np.eye(4)
@@ -305,8 +297,8 @@ class CustomDataset:
 		pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
 
 		view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
-		# vis.run()
-		depth_image = vis.capture_depth_float_buffer(do_render=True)
+		# self.o3d_vis.run()
+		depth_image = self.o3d_vis.capture_depth_float_buffer(do_render=True)
 		depth_image = np.array(depth_image)
 		depth_image_exp = np.exp(-depth_image)
 		depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
@@ -314,8 +306,6 @@ class CustomDataset:
 		# downsampled_image = self.downsample_max(depth_image_exp_bg, self.downsampling_factor)
 		# バイキュービック補完によるダウンサンプリング
 		downsampled_image = resize(depth_image_exp_bg, self.target_dim)
-		vis.remove_geometry(global_map_world_pc)
-		vis.destroy_window()
 
 		return downsampled_image
 	
@@ -382,9 +372,8 @@ class CustomDataset:
 		plt.show()
 
 	def visualize_open3d_world(self, replay_data=None, t=0, global_map_world_pc=None, p_i_world=None, q_i_world=None):
-		vis = o3d.visualization.Visualizer()
-		vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
-		render_option = vis.get_render_option()  
+		# self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
+		render_option = self.o3d_vis.get_render_option()  
 		render_option.point_size = 10.0
 		render_option.line_width = 1.0
 
@@ -403,42 +392,20 @@ class CustomDataset:
 			lineset.points = o3d.utility.Vector3dVector(np.array([trajectory_x, trajectory_y, trajectory_z]).T)
 			lineset.lines = o3d.utility.Vector2iVector(np.array([[i, i+1] for i in range(len(trajectory_x)-1)]))
 			lineset.colors = o3d.utility.Vector3dVector(np.array([[1, 0, 0] for i in range(len(trajectory_x)-1)]))
-			vis.add_geometry(lineset)
+			self.o3d_vis.add_geometry(lineset)
 			# snapshotの速度ベクトルの描画
 			arrow, pos = self.create_arrow(begin=[snapshot_x, snapshot_y, snapshot_z], end=[snapshot_x+snapshot_vx, snapshot_y+snapshot_vy, snapshot_z+snapshot_vz], color=[0,0,0], normalized=True)
 			if arrow is not None:
-				vis.add_geometry(arrow)
-				vis.add_geometry(pos)
+				self.o3d_vis.add_geometry(arrow)
+				self.o3d_vis.add_geometry(pos)
 
 		origin_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
-		vis.add_geometry(global_map_world_pc)
-		vis.add_geometry(origin_frame)
+		self.o3d_vis.add_geometry(global_map_world_pc)
+		self.o3d_vis.add_geometry(origin_frame)
 
-		view_control = vis.get_view_control()
-		intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
+		downsampled_image = self.get_local_observation(p_i_world, q_i_world)
+		self.o3d_vis.run()
 
-		# カメラの姿勢を設定
-		rot_1 = np.eye(4)
-		rot_2 = np.eye(4)
-		attitude = quaternion.as_rotation_matrix(q_i_world.conjugate())
-		rot_1[:3, 3] = - p_i_world
-		align_mat = np.dot(Rotation.from_euler('x', 90, degrees=True).as_matrix(), Rotation.from_euler('z', 90, degrees=True).as_matrix())
-		rot_2[:3,:3] = np.dot(align_mat, attitude)
-		pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
-		pinhole_parameters.intrinsic = intrinsic
-		pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
-
-		view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)
-		vis.run()
-		depth_image = vis.capture_depth_float_buffer(do_render=True)
-		depth_image = np.array(depth_image)
-		depth_image_max = np.max(depth_image)
-		depth_image_inverted = np.subtract(depth_image_max, depth_image)
-		depth_image_inverted_bg = np.where(depth_image_inverted==depth_image_max, 0, depth_image_inverted)
-		# 最大値によるダウンサンプリング
-		# downsampled_image = self.downsample_max(depth_image_inverted_bg, self.downsampling_factor)
-		# バイキュービック補完によるダウンサンプリング
-		downsampled_image = resize(depth_image_inverted_bg, self.target_dim)
 		print("downsampled_image.shape = {}".format(downsampled_image.shape))
 		# デプス画像の描画
 		plt.imshow(downsampled_image, cmap='plasma')
@@ -455,19 +422,18 @@ class CustomDataset:
 			neighbor_arrow_list.append(neighbor_arrow)
 			neighbor_arrow_list.append(neighbor_pos)
 
-		vis = o3d.visualization.Visualizer()
-		vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
+		# self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
 		# render_option = vis.get_render_option()  
 		# render_option.point_size = 10.0
 
 		origin_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
-		vis.add_geometry(global_map_base_pc)
-		vis.add_geometry(origin_frame)
-		vis.add_geometry(agent_arrow)
+		self.o3d_vis.add_geometry(global_map_base_pc)
+		self.o3d_vis.add_geometry(origin_frame)
+		self.o3d_vis.add_geometry(agent_arrow)
 		for nxt in neighbor_arrow_list:
-			vis.add_geometry(nxt)
+			self.o3d_vis.add_geometry(nxt)
 
-		view_control = vis.get_view_control()
+		view_control = self.o3d_vis.get_view_control()
 		intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
 
 		# カメラを原点に固定
@@ -478,7 +444,7 @@ class CustomDataset:
 		pinhole_parameters.extrinsic = rot
 		
 		view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)
-		vis.run()
+		self.o3d_vis.run()
 	
 	def visualize_open3d(self, replay_data, global_map_world_pc, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, p_i_world, q_i_world):
 
@@ -527,6 +493,7 @@ class CustomDataset:
 		print("state_seq_of_all_drones.shape = {}".format(replay_data.shape))
 		vision_file_path = "{}/../vision/{}.pcd".format(os.path.dirname(replay_file), basename_without_ext)
 		global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
+		self.create_field(global_map_world_pc)
 		for t in range(0, replay_data.shape[0]-1):
 			if t % 10 == 0:
 				print("t = {}".format(t))
@@ -543,16 +510,15 @@ class CustomDataset:
 				neighbor_state_local_array, v_i_local, goal_local, action = self.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next)
 				normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local = self.clip_and_normlize(neighbor_state_local_array, v_i_local, goal_local)
 
-				# TODO 未検証
-				depth_data = self.get_local_observation(global_map_world_pc, p_i_world, q_i_world)
+				depth_data = self.get_local_observation(p_i_world, q_i_world)
 				self.depth_data_log[agent_id].append(depth_data)
 
 				data = [int(normalized_neighbor_state_local_array.shape[0]/2), normalized_goal_local, normalized_v_i_local, normalized_neighbor_state_local_array, depth_data, action]
 				dataset.append(data)
-			if(visualize and t > 20):
+			if(visualize and t > 100):
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
 				self.visualize_data(replay_data, global_map_world_pc, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, p_i_world, q_i_world, self.depth_data_log)
-		# データセットの作成(TODO)
+		self.destroy_field(global_map_world_pc)
 		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
 
