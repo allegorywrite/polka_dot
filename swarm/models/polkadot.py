@@ -7,6 +7,7 @@ from ray.rllib.models.torch.fcnet import FullyConnectedNetwork
 from gym.spaces import Box, Dict
 import torch
 import yaml
+import os
 
 class Polkadot(TorchModelV2, nn.Module):
   def __init__(self, obs_space, action_space, num_outputs, model_config, name):
@@ -14,8 +15,8 @@ class Polkadot(TorchModelV2, nn.Module):
     nn.Module.__init__(self)
 
     yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/params.yaml")
-		with open(yaml_path, 'r') as f:
-			params = yaml.load(f, Loader=yaml.SafeLoader)
+    with open(yaml_path, 'r') as f:
+      params = yaml.load(f, Loader=yaml.SafeLoader)
     
     # 状態
     self.state_dim = 6

@@ -3,14 +3,14 @@ env:
   camera_width: 640 # カメラ画像の幅
   camera_height: 360 # カメラ画像の高さ
   goal_horizon: 8 
-  sencing_radius: 3 
+  sencing_radius: 100
   frequency: 100 # シミュレーションの周波数
   max_vel: 3.0
-  map_name: "agents3_28703135"
+  map_name: "agents10_57097467"
   start_pos: [0.0, 0.0, 0.0]
   goal_pos: [0.0, 0.0, 0.0]
 vae:
-  batch_size: 100 # バッチサイズ
+  batch_size: 5 # バッチサイズ
   image_size: [128, 128] # 画像サイズ
   hidden_dims: [32, 64, 128, 256, 512] # 隠れ層の次元数
   latent_dim: 200 # 潜在変数の次元数

@@ -10,3 +10,5 @@ files/logs/*.npy
 files/videos/*.mp4
 results/
 tmp/
+
+polkadot.egg-info/

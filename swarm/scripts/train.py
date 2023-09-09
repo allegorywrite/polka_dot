@@ -1,3 +1,6 @@
+import sys
+sys.path.append("../../")
+
 import torch
 from torch.optim import Adam
 from swarm.models.polkadot import Polkadot
@@ -107,12 +110,12 @@ if __name__ == '__main__':
     
     obs_space = temp_env.observation_space[0]
     action_space = temp_env.action_space[0]
-    # print("obs_space: ", obs_space)
-    # print("action_space: ", action_space)
+    print("obs_space: ", obs_space)
+    print("action_space: ", action_space)
     num_outputs = action_space.shape[0]
     model_config = ppo.DEFAULT_CONFIG.copy()
     name = "polkadot"
-    # print("num_outputs: ", num_outputs)
+    print("num_outputs: ", num_outputs)
 
     model = Polkadot(obs_space, action_space, num_outputs, model_config, name)
     model.to(device)
