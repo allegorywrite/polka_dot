@@ -12,3 +12,5 @@ results/
 tmp/
 
 polkadot.egg-info/
+
+swarm/cache/

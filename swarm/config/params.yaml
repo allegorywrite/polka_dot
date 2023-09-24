@@ -3,7 +3,7 @@ env:
   camera_width: 640 # カメラ画像の幅
   camera_height: 360 # カメラ画像の高さ
   goal_horizon: 8 
-  sencing_radius: 100
+  sencing_radius: 3
   frequency: 100 # シミュレーションの周波数
   max_vel: 3.0
   map_name: "agents10_57097467"

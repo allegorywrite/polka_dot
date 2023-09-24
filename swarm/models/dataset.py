@@ -1,7 +1,7 @@
 import glob
 import numpy as np
 import concurrent.futures
-from multiprocessing import cpu_count
+from multiprocessing import Manager, cpu_count
 # from torch import nn, tanh, relu
 import sys
 from pathlib import Path
@@ -36,9 +36,11 @@ class CustomDataset:
 		self.drones_num = params["env"]["num_drones"]
 		self.dim_per_drone = 14
 		self.replay_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/training/replay/agents{}_*.csv".format(self.drones_num))
-		self.train_dataset = []
-		self.test_dataset = []
-		self.data_num_max = 100000
+		manager = Manager()
+		self.train_dataset = manager.list()
+		self.test_dataset = manager.list()
+		self.file_count = manager.Value('i', 0)
+		self.data_num_max = 100000000
 		self.t_start = 0
 		self.goal_horizon = params["env"]["goal_horizon"]
 		self.use_open3d = True
@@ -54,6 +56,10 @@ class CustomDataset:
 		self.test_train_ratio = 0.8
 
 		self.depth_data_log = [[] for _ in range(self.drones_num)]
+
+		# self.test_array = manager.list()
+		self.file_size = 0
+		self.file_batch_size = 100
 
 	# get [ State Observation Action ]
 	def getSOA_of_world(self, replay_data, map_data, t, agent_id):
@@ -138,11 +144,23 @@ class CustomDataset:
 		# 				depth_data[u - min_u, v - min_v] = z
 		depth_data = np.zeros((1,1))
 		return depth_data
+
+	def safe_as_rotation_matrix(self, q):
+		if np.abs(np.linalg.norm(quaternion.as_float_array(q))) < 1e-8:
+			return np.identity(3)
+		else:
+			return quaternion.as_rotation_matrix(q)
+
+	def safe_as_euler_angles(self, q):
+		if np.abs(np.linalg.norm(quaternion.as_float_array(q))) < 1e-8:
+			return np.zeros(3)
+		else:
+			return quaternion.as_euler_angles(q)
 	
 	def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next):
 		# Observation(Local座標型)
-		R_inverse_iw = quaternion.as_rotation_matrix(q_i_world.conjugate())
-		euler_iw = quaternion.as_euler_angles(q_i_world.conjugate())
+		R_inverse_iw = self.safe_as_rotation_matrix(q_i_world.conjugate())
+		euler_iw = self.safe_as_euler_angles(q_i_world.conjugate())
 		# if t % 10 == 0:
 		# 	mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
 		# 	size=0.6, origin=[0, 0, 0])
@@ -288,7 +306,7 @@ class CustomDataset:
 
 		rot_1 = np.eye(4)
 		rot_2 = np.eye(4)
-		attitude = quaternion.as_rotation_matrix(q_i_world.conjugate())
+		attitude = self.safe_as_rotation_matrix(q_i_world.conjugate())
 		rot_1[:3, 3] = - p_i_world
 		align_mat = np.dot(Rotation.from_euler('x', 90, degrees=True).as_matrix(), Rotation.from_euler('z', 90, degrees=True).as_matrix())
 		rot_2[:3,:3] = np.dot(align_mat, attitude)
@@ -450,14 +468,14 @@ class CustomDataset:
 
 		# # オイラー角からquaternion
 		# euler_iw = [0.3, 0, 0]
-		# quaternion_iw = quaternion.from_euler_angles(euler_iw)
+		# quaternion_iw = self.safe_as_euler_angles(euler_iw)
 		# q_i_world = quaternion_iw
 		self.visualize_open3d_world(replay_data, t, global_map_world_pc, p_i_world, q_i_world)
 		# global_map_world_array = np.asarray(global_map_world_pc.points)
 		# global_map_base_pc = o3d.geometry.PointCloud()
 		# global_map_base_pc.points = o3d.utility.Vector3dVector(global_map_world_array)
-		# # zero_attitude = quaternion.as_rotation_matrix(np.quaternion(1,0,0,0))
-		# R_inverse_iw = quaternion.as_rotation_matrix(q_i_world.conjugate())
+		# # zero_attitude = self.safe_as_rotation_matrixx(np.quaternion(1,0,0,0))
+		# R_inverse_iw = self.safe_as_rotation_matrix(q_i_world.conjugate())
 		# global_map_base_pc.translate(-p_i_world)
 		# global_map_base_pc.rotate(R_inverse_iw, center=(0,0,0))
 		# self.visualize_open3d_base(global_map_base_pc, neighbor_state_local_array, goal_local, action)
@@ -490,13 +508,13 @@ class CustomDataset:
 		basename_without_ext, ext = os.path.splitext(os.path.basename(replay_file))
 		map_file = "{}/../map/{}.yaml".format(os.path.dirname(replay_file), basename_without_ext)
 		map_data = yaml.load(open(map_file), Loader=yaml.FullLoader)
-		print("state_seq_of_all_drones.shape = {}".format(replay_data.shape))
+		# print("state_seq_of_all_drones.shape = {}".format(replay_data.shape))
 		vision_file_path = "{}/../vision/{}.pcd".format(os.path.dirname(replay_file), basename_without_ext)
 		global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 		self.create_field(global_map_world_pc)
 		for t in range(0, replay_data.shape[0]-1):
-			if t % 10 == 0:
-				print("t = {}".format(t))
+			# if t % 10 == 0:
+			# 	print("[dataset] file = ", basename_without_ext,  "t = {}".format(t))
 			if replay_data[t,0] == 0:
 				self.t_start = t + 1
 				continue
@@ -511,18 +529,27 @@ class CustomDataset:
 				normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local = self.clip_and_normlize(neighbor_state_local_array, v_i_local, goal_local)
 
 				depth_data = self.get_local_observation(p_i_world, q_i_world)
-				self.depth_data_log[agent_id].append(depth_data)
+				# self.depth_data_log[agent_id].append(depth_data)
 
 				data = [int(normalized_neighbor_state_local_array.shape[0]/2), normalized_goal_local, normalized_v_i_local, normalized_neighbor_state_local_array, depth_data, action]
 				dataset.append(data)
-			if(visualize and t > 100):
+			if(visualize and t > 30):
 				print("Visualizing Data at t = {}, agent_id = {}".format(t, agent_id))
 				self.visualize_data(replay_data, global_map_world_pc, local_map_base_depth, neighbor_state_local_array, goal_local, action, t, p_i_world, q_i_world, self.depth_data_log)
 		self.destroy_field(global_map_world_pc)
+		# メモリの解放
+		del replay_data
+		del global_map_world_pc
+		del local_map_base_depth
+		del neighbor_state_local_array
+		del goal_local
+		del action
+		del depth_data
+
 		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
 
-	def generate_dict(self, dataset, shuffle=True, name=None):
+	def generate_dict(self, dataset, id=None, shuffle=True, name=None):
 		if shuffle:
 			random.shuffle(dataset)
 		dataset_dict = dict()
@@ -538,59 +565,99 @@ class CustomDataset:
 		for key in dataset_dict.keys():
 			dataset = dataset_dict[key]
 			preprocessed_data = np.array(dataset, dtype=object)
-			data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}.npy".format(name, key))
+			if id is not None:
+				data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}_id{}.npy".format(name, key, id))
+			else:
+				data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}.npy".format(name, key))
 			os.makedirs(os.path.dirname(data_dir), exist_ok=True)
 			np.save(data_dir, preprocessed_data)
 		
 		return dataset_dict
 
-	def load_dict(self, name=None):
+	def load_dict(self, name=None, id=None):
 		dataset_dict = dict()
-		for key in range(0, self.drones_num):
-			data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}.npy".format(name, key))
-			if not os.path.exists(data_dir):
-				print("Error: {} does not exist.".format(data_dir))
-				continue
-			dataset_dict[key] = np.load(data_dir, allow_pickle=True)
+		if id is not None:
+			for key in range(0, self.drones_num):
+				data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}_id{}.npy".format(name, key, id))
+				if not os.path.exists(data_dir):
+					print("Error: {} does not exist.".format(data_dir))
+					continue
+				dataset_dict[key] = np.load(data_dir, allow_pickle=True)
+		else:
+			for key in range(0, self.drones_num):
+				data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}_id*.npy".format(name, key))
+				files = glob.glob(data_dir)
+				dataset_dict[key] = []
+				for file in files:
+					data = np.load(file, allow_pickle=True)
+					print("file = {}, data.shape = {}".format(file, data.shape))
+					dataset_dict[key].extend(data)
+				# if not os.path.exists(data_dir):
+				# 	print("Error: {} does not exist.".format(data_dir))
+				# 	continue
+				# dataset_dict[key] = np.load(data_dir, allow_pickle=True)
 		return dataset_dict
+	
+	def process_file(self, file_info):
+			index, file = file_info
+			dataset = self.generate_dataset(file)
+			len_case = len(dataset)
+			# print('files = {}, len_case = {}'.format(file, len_case))
+			rand = np.random.uniform(0, 1)
+			if rand <= self.test_train_ratio:
+				self.train_dataset.extend(dataset)
+				print("[dataset] train_dataset: ", len(self.train_dataset))
+			else:
+				self.test_dataset.extend(dataset)
+				print("[dataset] test_dataset: ", len(self.test_dataset))
+			self.file_count.value += 1
+			# print("[dataset] Progress: {}/{}".format(index, self.file_size))
+			print("[dataset] Progress: {}/{}".format(self.file_count.value, self.file_size))
 		
-	def load_data(self, load=False, save=False, visualize=False):
+	def load_data(self, load=False, save=False, visualize=False, id=None):
 		if load:
 			print("Loading preprocessed data...")
-			dataset_dict_train = self.load_dict(name="train")
-			# dataset_dict_test = self.load_dict(name="test")
-			dataset_dict_test = None
+			dataset_dict_train = self.load_dict(name="train", id=id)
+			dataset_dict_test = self.load_dict(name="test", id=id)
 			return dataset_dict_train, dataset_dict_test
 
 		print("Loading Data...")
 		files = glob.glob(self.replay_dir)
 		print("Size of files: ", len(files))
-		len_case = 0
+		self.file_size = len(files)
 		if visualize:
 			print("Visualizing Data...")
 			self.generate_dataset(files[0], True)
 
 		print("Generating Dataset...")
-		with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count()) as executor:
-			itr = 0
-			for dataset in executor.map(self.generate_dataset, files):
-				len_case += len(dataset)
-				itr += 1
-				print('files = {}, len_case = {}'.format(itr, len_case))
-				if len_case > self.data_num_max:
-					break
-				if np.random.uniform(0, 1) <= self.test_train_ratio:
-					self.train_dataset.extend(dataset)
-				else:
-					self.test_dataset.extend(dataset)
-		print('Total Training Dataset Size: ',len(self.train_dataset))
-		print('Total Test Dataset Size: ',len(self.test_dataset))
 
-		if save:
-			dataset_dict_train = self.generate_dict(self.train_dataset, name="train", shuffle=True)
-			dataset_dict_test = self.generate_dict(self.test_dataset, name="test", shuffle=True)
+		batch_itr = 0
+		for i in range(0, len(files), self.file_batch_size):
+			print("Processing {}th batch...".format(batch_itr))
+			manager = Manager()
+			self.train_dataset = manager.list()
+			self.test_dataset = manager.list()
+			files_batch = files[i:i+self.file_batch_size]
 
-		return dataset_dict_train, dataset_dict_test
+			with concurrent.futures.ProcessPoolExecutor(max_workers=int(cpu_count())) as executor:
+				executor.map(self.process_file, enumerate(files_batch))
+			del manager
+			del executor
+
+			print(batch_itr, 'th file batch, Training Dataset Size: ',len(self.train_dataset))
+			print(batch_itr, 'th file batch, Total Test Dataset Size: ',len(self.test_dataset))
+
+			if save:
+				dataset_dict_train = self.generate_dict(self.train_dataset, id=batch_itr, name="train", shuffle=True)
+				dataset_dict_test = self.generate_dict(self.test_dataset, id=batch_itr, name="test", shuffle=True)
+			batch_itr += 1
+			del self.train_dataset
+			del self.test_dataset
+			del dataset_dict_train
+			del dataset_dict_test
+
+		# return dataset_dict_train, dataset_dict_test
+		return None, None
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()

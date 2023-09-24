@@ -77,7 +77,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
         self.ACT_TYPE = act
         self.EPISODE_LEN_SEC = 5
         #### Create integrated controllers #########################
-        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID]:
+        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL5D]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
             if drone_model in [DroneModel.CF2X, DroneModel.CF2P]:
                 self.ctrl = [DSLPIDControl(drone_model=DroneModel.CF2X) for i in range(num_drones)]
@@ -101,7 +101,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
                          dynamics_attributes=dynamics_attributes
                          )
         #### Set a limit on the maximum target speed ###############
-        if act == ActionType.VEL:
+        if act == ActionType.VEL or act == ActionType.VEL5D:
             self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
 
     ################################################################################
@@ -195,6 +195,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
 
         """
         rpm = np.zeros((self.NUM_DRONES,4))
+        # print("[BasePolkadotAviary._preprocessAction()] action:", action)
         for k, v in action.items():
             if self.ACT_TYPE == ActionType.RPM: 
                 rpm[int(k),:] = np.array(self.HOVER_RPM * (1+0.05*v))

@@ -46,6 +46,7 @@ class Polkadot(TorchModelV2, nn.Module):
     self._model_in = None
   
   def to(self, device):
+    self.device = device
     self.model_neighbors.to(device)
     self.model_obstacle.to(device)
     self.action_model.to(device)
@@ -76,17 +77,25 @@ class Polkadot(TorchModelV2, nn.Module):
   action : [vx, vy, vz, |v|, wz]
   """
   def forward(self, input_dict, state, seq_lens):
-    print("state:", input_dict["state"])
-    print("depth:", input_dict["depth"])
-    print("neighbors:", input_dict["neighbors"])
+    # print("state:", input_dict["state"])
+    # print("depth:", input_dict["depth"])
+    # print("neighbors:", input_dict["neighbors"])
     neighbors_num = input_dict["state"][0]
     # Deep Set
-    input_neighbors = input_dict["neighbors"][0:neighbors_num*6]
+    input_neighbors = input_dict["neighbors"][0:int(neighbors_num*6)]
+    # Tesorに変換
+    input_neighbors = torch.from_numpy(input_neighbors).unsqueeze(0).to(self.device)
     deepset_output = self.model_neighbors(input_neighbors)
     # VAE
-    vae_output = self.model_obstacle(input_dict["depth"])
-    input_ppo = torch.cat([input_dict["state"][1:], vae_output, deepset_output], dim=1)
-    self._model_in = [input_dict["obs_flat"], state, seq_lens]
+    input_obs = torch.from_numpy(input_dict["depth"]).unsqueeze(0).unsqueeze(0).to(self.device)
+    mu, log_var = self.model_obstacle.encode(input_obs)
+    vae_output = self.model_obstacle.reparameterize(mu, log_var)
+
+    input_state = torch.from_numpy(input_dict["state"][1:]).unsqueeze(0).to(self.device)
+    input_ppo = torch.cat([input_state, vae_output, deepset_output], dim=1)
+    # TODO
+    # self._model_in = [input_dict["obs_flat"], state, seq_lens]
+    self._model_in = [input_ppo, state, seq_lens]
     output = self.action_model({"obs" : input_ppo}, state, seq_lens)
     return output
 
