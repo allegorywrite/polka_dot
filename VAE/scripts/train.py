@@ -27,7 +27,7 @@ if __name__ == '__main__':
     # yamlファイルの読み込み
     yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../swarm/config/params.yaml")
     with open(yaml_path, 'r') as f:
-        params = yaml.load(f)
+        params = yaml.load(f, yaml.SafeLoader)
 
     image_num_train = 110000
     image_num_test = 100
@@ -47,7 +47,7 @@ if __name__ == '__main__':
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/output.png")
 
-    vision_file_path = "map/map.pcd"
+    vision_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../map/map.pcd")
     global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 
     train_dataset = CustomDataset(num_images=image_num_train, map_pcd=global_map_world_pc)

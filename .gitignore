@@ -14,3 +14,4 @@ tmp/
 polkadot.egg-info/
 
 swarm/cache/
+swarm/gym_pybullet_drones/**
