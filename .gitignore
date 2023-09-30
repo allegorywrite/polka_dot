@@ -20,3 +20,5 @@ swarm/__pycache__/
 VAE/__pycache__/
 VAE/.vscode/
 .vscode/
+
+swarm/gym_pybullet_drones/**
