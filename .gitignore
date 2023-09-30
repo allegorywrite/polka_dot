@@ -14,3 +14,9 @@ tmp/
 polkadot.egg-info/
 
 swarm/cache/
+
+gym_pybullet_drones/__pycache__/
+swarm/__pycache__/
+VAE/__pycache__/
+VAE/.vscode/
+.vscode/

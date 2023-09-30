@@ -10,10 +10,10 @@ env:
   start_pos: [0.0, 0.0, 0.0]
   goal_pos: [0.0, 0.0, 0.0]
 vae:
-  batch_size: 5 # バッチサイズ
+  batch_size: 100 # バッチサイズ
   image_size: [128, 128] # 画像サイズ
   hidden_dims: [32, 64, 128, 256, 512] # 隠れ層の次元数
-  latent_dim: 200 # 潜在変数の次元数
+  latent_dim: 64 # 潜在変数の次元数
   in_channels: 1 # 入力画像のチャンネル数(デプス画像は1)
   lr: 0.005 # 学習率
   scheduler_gamma: 0.95 # 学習率の減衰率
