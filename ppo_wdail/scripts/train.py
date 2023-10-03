@@ -7,6 +7,12 @@ from swarm.models.polkadot import Polkadot
 from gym_pybullet_drones.envs.multi_agent_rl.PolkadotAviary import PolkadotAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 
+from ppo_wdail.systems.storage import RolloutStorage
+from ppo_wdail.systems.wdail import wdail_train
+from ppo_wdail.models.discriminator import Discriminator
+
+from ray.rllib.agents import ppo
+
 # Wasserstein Distance guided Adversarial Imitation Learning (WDAIL)の学習
 
 def train():
@@ -42,12 +48,25 @@ def train():
     print("action_space: ", action_space)
     num_outputs = action_space.shape[0]
     model_config = ppo.DEFAULT_CONFIG.copy()
+    name = "polkadot"
+
     agent = Polkadot(obs_space, action_space, num_outputs, model_config, name)
 
     # 識別モデルの登録
+    discriminator = Discriminator()
+
     # データバッファの登録
+    rollouts = RolloutStorage()
+
     # データセットの登録
+    gail_train_loader = torch.utils.data.DataLoader(
+        ExpertDataset(),
+        batch_size=params["wdail"]["gail_batch_size"],
+        shuffle=True,
+        drop_last=True)
+
     # モデルの学習
+    wdail_train(params=params, env=env, agent=agent, discriminator=discriminator, rollouts=rollouts, gail_train_loader=gail_train_loader)
 
 if __name__ == "__main__":
     train()
