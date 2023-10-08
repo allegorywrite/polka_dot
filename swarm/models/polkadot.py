@@ -10,9 +10,11 @@ import yaml
 import os
 
 class Polkadot(TorchModelV2, nn.Module):
-  def __init__(self, obs_space, action_space, num_outputs, model_config, name):
+  def __init__(self, obs_space, action_space, num_outputs, model_config, name, device):
     TorchModelV2.__init__(self, obs_space, action_space, num_outputs, model_config, name)
     nn.Module.__init__(self)
+
+    self.device = device
 
     yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/params.yaml")
     with open(yaml_path, 'r') as f:
@@ -29,6 +31,9 @@ class Polkadot(TorchModelV2, nn.Module):
 
     self.model_neighbors = DeepSet(self.state_dim, self.deepset_latent_dim)
     self.model_obstacle = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=self.vae_latent_dim)
+    model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
+    self.model_obstacle.load_state_dict(torch.load(model_load_path, map_location=self.device))
+    self.model_obstacle.eval()
     self.action_model = FullyConnectedNetwork(
       Box(low=-1, high=1, shape=(self.own_obs_dim, )), 
       action_space,
@@ -44,6 +49,7 @@ class Polkadot(TorchModelV2, nn.Module):
       name + "_vf"
       )
     self._model_in = None
+    self.optimizer = torch.optim.Adam(self.parameters(), lr=params["ppo"]["lr"])
   
   def to(self, device):
     self.device = device

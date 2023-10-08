@@ -6,6 +6,9 @@ import torch.nn.functional as F
 import torch.utils.data
 from torch import autograd
 
+from swarm.models.deepset import DeepSet
+from VAE.models.vanilla_vae import VanillaVAE
+
 from baselines.common.running_mean_std import RunningMeanStd
 
 class Dset(object):
@@ -38,18 +41,30 @@ class Dset(object):
         return inputs, labels
 
 class Discriminator(nn.Module):
-    def __init__(self, input_dim, hidden_dim, device, reward_type, update_rms, cliprew_down=-10.0, cliprew_up=10.0):
+    def __init__(self, params, device):
         super(Discriminator, self).__init__()
-        self.cliprew_down = cliprew_down
-        self.cliprew_up = cliprew_up
+        self.params = params
+        self.cliprew_down = params["discriminator"]["cliprew_down"]
+        self.cliprew_up = params["discriminator"]["cliprew_up"]
         self.device = device
-        self.reward_type = reward_type
-        self.update_rms = update_rms
+        self.reward_type = params["discriminator"]["reward_type"]
+        self.update_rms = params["discriminator"]["update_rms"]
 
-        # self.trunk = nn.Sequential(
-        #     nn.Linear(input_dim, hidden_dim), nn.Tanh(),
-        #     nn.Linear(hidden_dim, hidden_dim), nn.Tanh(),
-        #     nn.Linear(hidden_dim, 1), nn.Tanh()).to(device)
+        # 状態
+        self.state_dim = 6
+        # DeepSetの出力次元
+        self.deepset_latent_dim = params["deepset"]["latent_dim"]
+        # VAEの出力次元
+        self.vae_latent_dim = params["vae"]["latent_dim"]
+        # 状態次元
+        self.own_obs_dim = self.state_dim + self.vae_latent_dim + self.deepset_latent_dim
+        # 行動次元
+        self.action_dim = params["env"]["action_dim"]
+
+        self.model_neighbors = DeepSet(self.state_dim, self.deepset_latent_dim)
+
+        input_dim = self.own_obs_dim + self.action_dim
+        hidden_dim = params["discriminator"]["hidden_dim"]
 
         self.trunk = nn.Sequential(
             nn.Linear(input_dim, hidden_dim), nn.Tanh(),
@@ -62,6 +77,32 @@ class Discriminator(nn.Module):
 
         self.returns = None
         self.ret_rms = RunningMeanStd(shape=())
+
+    def forward(self, obs, action):
+        if type(obs) == dict:
+            print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
+            raise NotImplementedError
+        elif type(obs) == torch.Tensor:
+            input_neighbors = obs[:, 6+self.vae_latent_dim:]
+            output_neighbors = self.model_neighbors(input_neighbors)
+            state = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
+        else:
+            print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
+            raise NotImplementedError
+        return self.trunk(torch.cat([state, action], dim=1))
+    
+    def obs_to_state(self, obs):
+        if type(obs) == dict:
+            print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
+            raise NotImplementedError
+        elif type(obs) == torch.Tensor:
+            input_neighbors = obs[:, 6+self.vae_latent_dim:]
+            output_neighbors = self.model_neighbors(input_neighbors)
+            state = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
+        else:
+            print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
+            raise NotImplementedError
+        return state
 
     def compute_grad_pen(self,
                          expert_state,
@@ -90,72 +131,6 @@ class Discriminator(nn.Module):
 
         grad_pen = lambda_ * (grad.norm(2, dim=1) - 1).pow(2).mean()
         return grad_pen
-
-    def update_zm(self, replay_buf, expert_buf, obsfilt=None, batch_size=128):
-        self.train()
-        obs = replay_buf.obs
-        obs_batch = obs[:-1].view(-1, *obs.size()[2:])
-        states = obs_batch.cpu().detach().numpy()
-
-        # states = np.concatenate(states,axis=1)
-        actions = replay_buf.actions
-        actions_batch = actions.view(-1,actions.size(-1))
-        actions = actions_batch.cpu().detach().numpy()
-
-        policy_buf = Dset(inputs=states[0:len(actions)], labels=actions, randomize=True)
-
-        loss = 0
-        g_loss =0.0
-        gp =0.0
-        n = 0
-
-        # loss = 0
-
-        # Sample replay buffer
-        policy_state, policy_action = policy_buf.get_next_batch(batch_size)
-        policy_state = torch.FloatTensor(policy_state).to(self.device)
-        policy_action = torch.FloatTensor(policy_action).to(self.device)
-        temp=[policy_state, policy_action]
-        policy_d = self.trunk(torch.cat([policy_state, policy_action], dim=1))
-
-        # Sample expert buffer
-        expert_state, expert_action = expert_buf.get_next_batch(batch_size)
-        expert_state = obsfilt(expert_state, update=False)
-        expert_state = torch.FloatTensor(expert_state).to(self.device)
-        expert_action = torch.FloatTensor(expert_action).to(self.device)
-        expert_d = self.trunk(torch.cat([expert_state, expert_action], dim=1))
-
-        # expert_loss = F.binary_cross_entropy_with_logits(
-        #     expert_d,
-        #     torch.ones(expert_d.size()).to(self.device))
-        # policy_loss = F.binary_cross_entropy_with_logits(
-        #     policy_d,
-        #     torch.zeros(policy_d.size()).to(self.device))
-
-        # expert_loss = torch.mean(expert_d).to(self.device)
-        # policy_loss = torch.mean(policy_d).to(self.device)
-
-        expert_loss = torch.mean(torch.tanh(expert_d)).to(self.device)
-        policy_loss = torch.mean(torch.tanh(policy_d)).to(self.device)
-
-        # gail_loss = expert_loss + policy_loss
-        wd = expert_loss - policy_loss
-        grad_pen = self.compute_grad_pen(expert_state, expert_action,
-                                         policy_state, policy_action)
-
-        # loss += (gail_loss + grad_pen).item()
-        loss += (-wd + grad_pen).item()
-        g_loss += (wd).item()
-        gp += (grad_pen).item()
-        n += 1
-
-        self.optimizer.zero_grad()
-        # (gail_loss + grad_pen).backward()
-        (-wd + grad_pen).backward()
-        self.optimizer.step()
-
-
-        return g_loss/n, gp/n, 0.0, loss / n
 
     def update(self, expert_loader, rollouts, obsfilt=None):
         self.train()
@@ -211,108 +186,6 @@ class Discriminator(nn.Module):
 
         return g_loss/n, gp/n, 0.0, loss / n
 
-    def update_origin(self, expert_loader, rollouts, obsfilt=None):
-        self.train()
-
-        policy_data_generator = rollouts.feed_forward_generator(
-            None, mini_batch_size=expert_loader.batch_size)
-
-        loss = 0
-        g_loss =0.0
-        gp =0.0
-        n = 0
-        for expert_batch, policy_batch in zip(expert_loader,
-                                              policy_data_generator):
-            policy_state, policy_action = policy_batch[0], policy_batch[2]
-            policy_d = self.trunk(
-                torch.cat([policy_state, policy_action], dim=1))
-
-            expert_state, expert_action = expert_batch
-            expert_state = obsfilt(expert_state.numpy(), update=False)
-            expert_state = torch.FloatTensor(expert_state).to(self.device)
-            expert_action = expert_action.to(self.device)
-            expert_d = self.trunk(
-                torch.cat([expert_state, expert_action], dim=1))
-
-            # expert_loss = F.binary_cross_entropy_with_logits(
-            #     expert_d,
-            #     torch.ones(expert_d.size()).to(self.device))
-            # policy_loss = F.binary_cross_entropy_with_logits(
-            #     policy_d,
-            #     torch.zeros(policy_d.size()).to(self.device))
-
-            expert_loss = torch.mean(expert_d).to(self.device)
-            policy_loss = torch.mean(policy_d).to(self.device)
-
-            # gail_loss = expert_loss + policy_loss
-            wd = expert_loss - policy_loss
-            grad_pen = self.compute_grad_pen(expert_state, expert_action,
-                                             policy_state, policy_action)
-
-            # loss += (gail_loss + grad_pen).item()
-            loss += (-wd + grad_pen).item()
-            g_loss += (wd).item()
-            gp += (grad_pen).item()
-            n += 1
-
-            self.optimizer.zero_grad()
-            # (gail_loss + grad_pen).backward()
-            (-wd + grad_pen).backward()
-            self.optimizer.step()
-
-        return g_loss/n, gp/n, 0.0, loss / n
-
-    def update_zm_origin(self, replay_buf, expert_buf, obsfilt=None, batch_size=128):
-        self.train()
-        obs = replay_buf.obs
-        obs_batch = obs[:-1].view(-1, *obs.size()[2:])
-        states = obs_batch.cpu().detach().numpy()
-
-        # states = np.concatenate(states,axis=1)
-        actions = replay_buf.actions
-        actions_batch = actions.view(-1,actions.size(-1))
-        actions = actions_batch.cpu().detach().numpy()
-
-        policy_buf = Dset(inputs=states[0:len(actions)], labels=actions, randomize=True)
-
-        # loss = 0
-
-        # Sample replay buffer
-        policy_state, policy_action = policy_buf.get_next_batch(batch_size)
-        policy_state = torch.FloatTensor(policy_state).to(self.device)
-        policy_action = torch.FloatTensor(policy_action).to(self.device)
-        temp=[policy_state, policy_action]
-        policy_d = self.trunk(torch.cat([policy_state, policy_action], dim=1))
-
-        # Sample expert buffer
-        expert_state, expert_action = expert_buf.get_next_batch(batch_size)
-        expert_state = obsfilt(expert_state, update=False)
-        expert_state = torch.FloatTensor(expert_state).to(self.device)
-        expert_action = torch.FloatTensor(expert_action).to(self.device)
-        expert_d = self.trunk(torch.cat([expert_state, expert_action], dim=1))
-
-        expert_loss = F.binary_cross_entropy_with_logits(
-            expert_d,
-            torch.ones(expert_d.size()).to(self.device))
-        policy_loss = F.binary_cross_entropy_with_logits(
-            policy_d,
-            torch.zeros(policy_d.size()).to(self.device))
-
-        gail_loss = expert_loss + policy_loss
-        grad_pen = self.compute_grad_pen(expert_state, expert_action,
-                                         policy_state, policy_action)
-        # print("gail_loss = %s,    gp=%s" % (gail_loss.item(), grad_pen.item()))
-
-        loss = (gail_loss + grad_pen).item()
-        # loss = (gail_loss).item()
-
-        self.optimizer.zero_grad()
-        (gail_loss + grad_pen).backward()
-        # (gail_loss).backward()
-        self.optimizer.step()
-
-        return gail_loss.item(), grad_pen.item(), 0.0, loss
-
     def predict_reward(self, state, action, gamma, masks, update_rms=True):
         with torch.no_grad():
             self.eval()
@@ -356,67 +229,3 @@ class Discriminator(nn.Module):
             # return reward / np.sqrt(self.ret_rms.var[0] + 1e-8)
             # return torch.clamp(reward,self.cliprew_down, self.cliprew_up)
             # return reward
-
-    def predict_reward_exp(self, state, action, gamma, masks, update_rms=True):
-        with torch.no_grad():
-            self.eval()
-            d = self.trunk(torch.cat([state, action], dim=1))
-            s = torch.exp(d)
-            # s = torch.sigmoid(d)
-            # reward = s.log() - (1 - s).log()
-            reward = s
-            # reward = d
-            if self.returns is None:
-                self.returns = reward.clone()
-
-            if update_rms:
-                self.returns = self.returns * masks * gamma + reward
-                self.ret_rms.update(self.returns.cpu().numpy())
-            # ttt = torch.clamp(reward / np.sqrt(self.ret_rms.var[0] + 1e-8), self.cliprew_down, self.cliprew_up)
-            # return torch.clamp(reward / np.sqrt(self.ret_rms.var[0] + 1e-8), self.cliprew_down, self.cliprew_up)
-            return reward / np.sqrt(self.ret_rms.var[0] + 1e-8)
-            # return torch.clamp(reward,self.cliprew_down, self.cliprew_up)
-            # return reward
-
-    def predict_reward_t1(self, state, action, gamma, masks, update_rms=True):
-        with torch.no_grad():
-            self.eval()
-            d = self.trunk(torch.cat([state, action], dim=1))
-            # s = torch.exp(d)
-            s = torch.sigmoid(d)
-            # reward = s.log() - (1 - s).log()
-            reward = - (1 - s).log()
-            # reward = d
-            if self.returns is None:
-                self.returns = reward.clone()
-
-            if update_rms:
-                self.returns = self.returns * masks * gamma + reward
-                self.ret_rms.update(self.returns.cpu().numpy())
-            # ttt = torch.clamp(reward / np.sqrt(self.ret_rms.var[0] + 1e-8), self.cliprew_down, self.cliprew_up)
-            # return torch.clamp(reward / np.sqrt(self.ret_rms.var[0] + 1e-8), self.cliprew_down, self.cliprew_up)
-            # return reward / np.sqrt(self.ret_rms.var[0] + 1e-8)
-            # return torch.clamp(reward,self.cliprew_down, self.cliprew_up)
-            return reward
-
-    def predict_reward_origin(self, state, action, gamma, masks, update_rms=True):
-        with torch.no_grad():
-            self.eval()
-            d = self.trunk(torch.cat([state, action], dim=1))
-            s = torch.exp(d)
-            # s = torch.sigmoid(d)
-            # reward = s.log() - (1 - s).log()
-            # reward = - (1 - s).log()
-            reward = s
-            # reward = d
-            if self.returns is None:
-                self.returns = reward.clone()
-
-            if update_rms:
-                self.returns = self.returns * masks * gamma + reward
-                self.ret_rms.update(self.returns.cpu().numpy())
-            # ttt = torch.clamp(reward / np.sqrt(self.ret_rms.var[0] + 1e-8), self.cliprew_down, self.cliprew_up)
-            # return torch.clamp(reward / np.sqrt(self.ret_rms.var[0] + 1e-8), self.cliprew_down, self.cliprew_up)
-            # return reward / np.sqrt(self.ret_rms.var[0] + 1e-8)
-            # return torch.clamp(reward,self.cliprew_down, self.cliprew_up)
-            return reward
