@@ -9,7 +9,7 @@ env:
   drone_radius: 0.2
   frequency: 100 # シミュレーションの周波数
   max_vel: 3.0
-  map_name: "agents10_10002064"
+  map_name: "agents10_57097467"
   start_pos: [0.0, 0.0, 0.0]
   goal_pos: [0.0, 0.0, 0.0]
   state_dim: 6 # 状態の次元数

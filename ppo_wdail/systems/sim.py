@@ -37,6 +37,23 @@ class SimulationManager:
         self.o3d_vis.add_geometry(global_map_world_pc)
         self.field_enabled = True
 
+    def create_volume_field(self, global_map_world_pc, visible=True, box_size=0.1):
+        if self.field_enabled:
+            return
+        self.global_map_world_pc = global_map_world_pc
+
+        # Convert point cloud to voxel grid
+        box_mesh = o3d.geometry.VoxelGrid.create_from_point_cloud(global_map_world_pc, voxel_size=box_size)
+            
+        self.o3d_vis = o3d.visualization.Visualizer()
+        self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=visible)
+        self.o3d_vis.add_geometry(box_mesh)
+        self.field_enabled = True
+
+    
+    def viz_run(self):
+        self.o3d_vis.run()
+
     # 最も近い点の距離配列を取得
     def get_nearby_points(self, p, radius=None, point_num=None):
         if radius is not None:
