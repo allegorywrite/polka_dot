@@ -14,6 +14,8 @@ tmp/
 polkadot.egg-info/
 
 swarm/cache/
+ppo_wdail/cache/
+ppo_wdail/scripts/runs/
 
 __pycache__/
 gym_pybullet_drones/__pycache__/

@@ -154,4 +154,5 @@ if __name__ == '__main__':
     plt.tight_layout()
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/reconstructed_images.png")
     plt.savefig(output_dir)  # Save the figure before showing it
-    plt.show()
+    print("Finish!!")
+    # plt.show()

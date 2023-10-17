@@ -88,15 +88,17 @@ class ExpertDataLoader(torch.utils.data.Dataset):
         return dataset
 
 class ExpertDataset(torch.utils.data.Dataset):
-    def __init__(self, params, data_size, batch_size, device, save_memory=False):
+    def __init__(self, params, device, save_memory=False, use_preprocessed_data=False):
         self.save_memory = save_memory
         self.data_generator = DataGenerator(params=params, device=device, encode_depth=save_memory)
-        self.data_generator.generate_data()
-        ntrain, ntest, file_batch_num = self.data_generator.__len__()
-        print("Total Train Dataset Size: ", ntrain, " Total Test Dataset Size: ", ntest, "File Batch Size: ", file_batch_num)
-        self.data_size = data_size
-        self.batch_size = batch_size
-        self.file_batch_num = file_batch_num
+        # TODO: use_preprocessed_dataに対応
+        if not use_preprocessed_data:
+            self.data_generator.generate_data()
+            ntrain, ntest, file_batch_num = len(self.data_generator)
+            print("Total Train Dataset Size: ", ntrain, " Total Test Dataset Size: ", ntest, "File Batch Size: ", file_batch_num)
+            self.file_batch_num = file_batch_num
+
+        self.data_size = params["wdail"]["data_size"]
         self.params = params
         self.device = device
         self.load_neighbors = None
@@ -109,6 +111,10 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.encoder.eval()
 
     def load_dataset(self, neighbors_num, name="train"):
+        if self.load_neighbors == neighbors_num:
+            print("Dataset already loaded")
+            return
+        self.load_neighbors = neighbors_num
         # キャッシュが存在する場合はそれを読み込む
         file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../cache/cache_{}_nn{}.pkl'.format(name, neighbors_num))
         if os.path.exists(file_path):
@@ -117,31 +123,43 @@ class ExpertDataset(torch.utils.data.Dataset):
             print("dataset loaded from ", file_path)
             self.trajectory = dataset
             return
-        if self.load_neighbors == neighbors_num:
-            print("Dataset already loaded")
-            return
-        self.load_neighbors = neighbors_num
-        train_dataset, _ = self.data_generator.load_data(neighbors_num=neighbors_num)
+        train_dataset, _ = self.data_generator.load_data(neighbors_num=neighbors_num, max_data_size=self.data_size)
         state_array = []
         action_array = []
-        for train_data in train_dataset:
+
+        if not train_dataset:
+            print("No data")
+            return
+
+        for i in range(len(train_dataset)):
+            item = train_dataset[i]
             if self.save_memory:
-                z = train_data[4]
+                z = item[4]
                 print("Shape of Encoded Depth: ", z.shape)
             else:
-                depth = train_data[4]
+                if i % 1000 == 0:
+                    print("Encoding Progress: ", i, "/", len(train_dataset))
+                depth = item[4]
                 depth = torch.from_numpy(depth).unsqueeze(0).unsqueeze(0).to(self.device)
                 mu, log_var = self.encoder.encode(depth)
-                z = self.encoder.reparameterize(mu, log_var)
-            goal = train_data[1]
-            velocity = train_data[2]
-            neighbor = train_data[3]
-            action = torch.from_numpy(train_data[5]).to(self.device)
-            combined = torch.cat([goal, velocity, z, neighbor], dim=0)
+                z = self.encoder.reparameterize(mu, log_var).squeeze(0).to("cpu").detach()
+            goal = torch.from_numpy(item[1])
+            velocity = torch.from_numpy(item[2])
+            neighbor = torch.from_numpy(item[3]).flatten()
+            action = torch.from_numpy(item[5])
+
+            if neighbor.shape[0] > 0:
+                combined = torch.cat([goal, velocity, z, neighbor], dim=0)
+            else:
+                combined = torch.cat([goal, velocity, z], dim=0)
             state_array.append(combined)
             action_array.append(action)
+
         self.trajectory["state"] = state_array
         self.trajectory["action"] = action_array
+        # ディレクトリが存在しない場合は作成
+        if not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../cache')):
+            os.mkdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../cache'))
         with open(file_path, 'wb') as f:
             pickle.dump(self.trajectory, f)
 
@@ -163,7 +181,7 @@ class ExpertDataset(torch.utils.data.Dataset):
         if self.load_neighbors == neighbors_num:
             idx = np.random.randint(0, len(self.trajectory["state"]))
             dataset = self.trajectory["state"][idx]
-            neighbor = dataset[self.params["vae"]["state_dim"]+self.encoder.latent_dim:]
+            neighbor = dataset[self.params["env"]["state_dim"]+self.encoder.latent_dim:]
             return neighbor
         else:
             print("Dataset must be loaded")

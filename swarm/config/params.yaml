@@ -20,6 +20,7 @@ vae:
   weight_decay: 0.0 # 重み減衰
   kld_weight: 0.05 # KLダイバージェンスの重み
   manual_seed: 42 # 乱数シード
+  num_images: 100000 # 学習に使用する画像の枚数
 deepset:
   latent_dim: 16 # 潜在変数の次元数
 ppo:

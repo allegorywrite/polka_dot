@@ -232,6 +232,7 @@ class BaseAviary(gym.Env):
             in each subclass for its format.
 
         """
+        self._beforeReset()
         p.resetSimulation(physicsClientId=self.CLIENT)
         #### Housekeeping ##########################################
         self._housekeeping()
@@ -354,6 +355,7 @@ class BaseAviary(gym.Env):
         info = self._computeInfo()
         #### Advance the step counter ##############################
         self.step_counter = self.step_counter + (1 * self.AGGR_PHY_STEPS)
+        obs, reward, done, info = self._afterStep(obs, reward, done, info)
         return obs, reward, done, info
     
     ################################################################################
@@ -533,6 +535,7 @@ class BaseAviary(gym.Env):
         """
         state = np.hstack([self.pos[nth_drone, :], self.quat[nth_drone, :], self.rpy[nth_drone, :],
                            self.vel[nth_drone, :], self.ang_v[nth_drone, :], self.last_clipped_action[nth_drone, :]])
+        # print("pos: ", self.pos[nth_drone, :], "quat: ", self.quat[nth_drone, :], "rpy: ", self.rpy[nth_drone, :],"vel: ", self.vel[nth_drone, :], "ang_v: ", self.ang_v[nth_drone, :], "last_clipped_action: ", self.last_clipped_action[nth_drone, :])
         return state.reshape(20,)
 
     ################################################################################
@@ -1073,3 +1076,19 @@ class BaseAviary(gym.Env):
 
         """
         raise NotImplementedError
+    
+    def _beforeReset(self):
+        """Runs before the environment is reset.
+
+        Can be implemented in a subclass.
+
+        """
+        pass
+
+    def _afterStep(self, obs, reward, done, info):
+        """Runs after the environment is stepped.
+
+        Can be implemented in a subclass.
+
+        """
+        return obs, reward, done, info

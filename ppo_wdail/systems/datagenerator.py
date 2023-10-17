@@ -18,14 +18,14 @@ import pandas as pd
 import yaml
 from scipy.spatial.transform import Rotation
 from skimage.transform import resize
-from swarm.system.sim import SimulationManager
+from ppo_wdail.systems.sim import SimulationManager
 from VAE.models.vanilla_vae import VanillaVAE
 import torch
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 # dataset will be array of 
-# [neighbor_num ∈ N, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action ∈ R^3]
+# [neighbors_num ∈ N, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action ∈ R^3]
 class DataGenerator:
 	def __init__(self, params, device, encode_depth=False):
 		self.device = device
@@ -62,7 +62,7 @@ class DataGenerator:
 		self.total_train_dataset_size = 0
 		self.total_test_dataset_size = 0
 
-		self.sim_manager = SimulationManager()
+		self.sim_manager = SimulationManager(params)
 
 		self.encode_depth = encode_depth
 		if self.encode_depth:
@@ -177,7 +177,7 @@ class DataGenerator:
 		del action
 		del depth_data
 
-		# [neighbor_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
+		# [neighbors_num, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action]
 		return dataset
 
 	def generate_dict(self, dataset, id=None, shuffle=True, name=None):
@@ -186,10 +186,10 @@ class DataGenerator:
 		dataset_dict = dict()
 
 		for data in dataset:
-			neighbor_num = data[0]
-			if neighbor_num not in dataset_dict:
-				dataset_dict[neighbor_num] = []
-			dataset_dict[neighbor_num].append(data)
+			neighbors_num = data[0]
+			if neighbors_num not in dataset_dict:
+				dataset_dict[neighbors_num] = []
+			dataset_dict[neighbors_num].append(data)
 
 		loader = []
 		print("keys:",dataset_dict.keys())
@@ -235,9 +235,9 @@ class DataGenerator:
 				# dataset_dict[key] = np.load(data_dir, allow_pickle=True)
 		return dataset_dict
 	
-	def load_array(self, name=None, neighbor_num=None):
+	def load_array(self, name=None, neighbors_num=None, max_data_size=100):
 		dataset_array = []
-		data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}_id*.npy".format(name, neighbor_num))
+		data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data/preprocessed_data/batch_{}_nn{}_id*.npy".format(name, neighbors_num))
 		files = glob.glob(data_dir)
 		if len(files) == 0:
 			print("Error: {} does not exist.".format(data_dir))
@@ -245,6 +245,10 @@ class DataGenerator:
 		for file in files:
 			data = np.load(file, allow_pickle=True)
 			dataset_array.extend(data)
+			if len(dataset_array) > max_data_size:
+				dataset_array = dataset_array[:max_data_size]
+				print("file = {}, dataset_array.shape = {}".format(file, np.array(dataset_array).shape))
+				break
 			print("file = {}, dataset_array.shape = {}".format(file, np.array(dataset_array).shape))
 		return dataset_array
 	
@@ -264,14 +268,14 @@ class DataGenerator:
 		# print("[dataset] Progress: {}/{}".format(index, self.file_size))
 		print("[dataset] Progress: {}/{}".format(self.file_count.value, self.file_size))
 
-	def load_data(self, id=None, neighbor_num=None):
+	def load_data(self, max_data_size=100, id=None, neighbors_num=None):
 		print("Loading preprocessed data...")
 		if id is not None:
 			train_data = self.load_dict(name="train", id=id)
 			test_data = self.load_dict(name="test", id=id)
-		elif neighbor_num is not None:
-			train_data = self.load_array(name="train", neighbor_num=neighbor_num)
-			test_data = self.load_array(name="test", neighbor_num=neighbor_num)
+		elif neighbors_num is not None:
+			train_data = self.load_array(name="train", neighbors_num=neighbors_num, max_data_size=max_data_size)
+			test_data = self.load_array(name="test", neighbors_num=neighbors_num, max_data_size=max_data_size)
 		return train_data, test_data
 		
 	def generate_data(self, visualize=False):
@@ -304,10 +308,10 @@ class DataGenerator:
 			del self.train_dataset
 			del self.test_dataset
 
-			# dataset_dict_train = self.generate_dict(self.train_dataset, id=batch_itr, name="train", shuffle=True)
-			# dataset_dict_test = self.generate_dict(self.test_dataset, id=batch_itr, name="test", shuffle=True)
-			# del dataset_dict_train
-			# del dataset_dict_test
+			dataset_dict_train = self.generate_dict(self.train_dataset, id=batch_itr, name="train", shuffle=True)
+			dataset_dict_test = self.generate_dict(self.test_dataset, id=batch_itr, name="test", shuffle=True)
+			del dataset_dict_train
+			del dataset_dict_test
 		self.file_batch_num = batch_itr
 
 	def __len__(self):

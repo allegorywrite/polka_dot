@@ -61,7 +61,7 @@ class Discriminator(nn.Module):
         # 行動次元
         self.action_dim = params["env"]["action_dim"]
 
-        self.model_neighbors = DeepSet(self.state_dim, self.deepset_latent_dim)
+        self.model_neighbors = DeepSet(self.state_dim, self.deepset_latent_dim).to(device)
 
         input_dim = self.own_obs_dim + self.action_dim
         hidden_dim = params["discriminator"]["hidden_dim"]
@@ -83,43 +83,45 @@ class Discriminator(nn.Module):
             print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
             raise NotImplementedError
         elif type(obs) == torch.Tensor:
-            input_neighbors = obs[:, 6+self.vae_latent_dim:]
+            input_neighbors = obs[:, self.state_dim+self.vae_latent_dim:]
             output_neighbors = self.model_neighbors(input_neighbors)
-            state = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
+            state = torch.cat([obs[:, :self.state_dim+self.vae_latent_dim], output_neighbors], dim=1)
         else:
             print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
             raise NotImplementedError
-        return self.trunk(torch.cat([state, action], dim=1))
+        
+        return self.trunk(torch.cat([state.to(torch.float32), action.to(torch.float32)], dim=1))
     
     def obs_to_state(self, obs):
         if type(obs) == dict:
             print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
             raise NotImplementedError
         elif type(obs) == torch.Tensor:
-            input_neighbors = obs[:, 6+self.vae_latent_dim:]
+            input_neighbors = obs[:, self.state_dim+self.vae_latent_dim:]
             output_neighbors = self.model_neighbors(input_neighbors)
-            state = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
+            state = torch.cat([obs[:, :self.state_dim+self.vae_latent_dim], output_neighbors], dim=1)
         else:
             print("Error in Discriminator.forward() type(obs) = %s" % type(obs))
             raise NotImplementedError
         return state
 
     def compute_grad_pen(self,
-                         expert_state,
+                         expert_obs,
                          expert_action,
-                         policy_state,
+                         policy_obs,
                          policy_action,
                          lambda_=10):
-        alpha = torch.rand(expert_state.size(0), 1)
-        expert_data = torch.cat([expert_state, expert_action], dim=1)
-        policy_data = torch.cat([policy_state, policy_action], dim=1)
+        alpha = torch.rand(expert_obs.size(0), 1)
+        expert_data = torch.cat([expert_obs, expert_action], dim=1)
+        policy_data = torch.cat([policy_obs, policy_action], dim=1)
 
         alpha = alpha.expand_as(expert_data).to(expert_data.device)
 
         mixup_data = alpha * expert_data + (1 - alpha) * policy_data
         mixup_data.requires_grad = True
 
-        disc = self.trunk(mixup_data)
+        # disc = self.trunk(mixup_data)
+        disc = self.forward(mixup_data[:, :-self.action_dim], mixup_data[:, -self.action_dim:])
         ones = torch.ones(disc.size()).to(disc.device)
         grad = autograd.grad(
             outputs=disc,
@@ -145,16 +147,19 @@ class Discriminator(nn.Module):
         for expert_batch, policy_batch in zip(expert_loader,
                                               policy_data_generator):
             policy_state, policy_action = policy_batch[0], policy_batch[2]
-            policy_d = self.trunk(
-                torch.cat([policy_state, policy_action], dim=1))
+            # policy_d = self.trunk(
+            #     torch.cat([policy_state, policy_action], dim=1))
+            policy_d = self.forward(policy_state, policy_action)
 
             expert_state, expert_action = expert_batch
-            expert_state = obsfilt(expert_state.numpy(), update=False)
-            expert_state = torch.FloatTensor(expert_state).to(self.device)
+            # expert_state = obsfilt(expert_state.numpy(), update=False)
+            # expert_state = torch.FloatTensor(expert_state).to(self.device)
+            # expert_action = expert_action.to(self.device)
+            # expert_d = self.trunk(
+            #     torch.cat([expert_state, expert_action], dim=1))
+            expert_state = expert_state.to(self.device)
             expert_action = expert_action.to(self.device)
-            expert_d = self.trunk(
-                torch.cat([expert_state, expert_action], dim=1))
-
+            expert_d = self.forward(expert_state, expert_action)
             # expert_loss = F.binary_cross_entropy_with_logits(
             #     expert_d,
             #     torch.ones(expert_d.size()).to(self.device))
@@ -189,7 +194,8 @@ class Discriminator(nn.Module):
     def predict_reward(self, state, action, gamma, masks, update_rms=True):
         with torch.no_grad():
             self.eval()
-            d = self.trunk(torch.cat([state, action], dim=1))
+            # d = self.trunk(torch.cat([state, action], dim=1))
+            d = self.forward(state, action)
             if self.reward_type == 0:
                 s = torch.exp(d)
                 reward = s

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ppo_wdail.systems.utils import AddBias, init
+from ppo_wdail.tools.utils import AddBias, init
 
 """
 Modify standard PyTorch distributions so they are compatible with this code.

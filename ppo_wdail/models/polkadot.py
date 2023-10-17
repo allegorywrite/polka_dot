@@ -27,15 +27,23 @@ class Polkadot(nn.Module):
     self.model_neighbors = DeepSet(self.state_dim, self.deepset_latent_dim)
     self.model_obstacle = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=self.vae_latent_dim)
     model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
-    self.model_obstacle.load_state_dict(torch.load(model_load_path, map_location=self.device))
+    self.model_obstacle.load_state_dict(torch.load(model_load_path))
     self.model_obstacle.eval()
+
+    self.clip_param = params["ppo"]["clip_param"]
+    self.ppo_epoch = params["ppo"]["ppo_epoch"]
+    self.num_mini_batch = params["wdail"]["num_mini_batch"]
+    self.value_loss_coef = params["ppo"]["value_loss_coef"]
+    self.entropy_coef = params["ppo"]["entropy_coef"]
+    self.max_grad_norm = params["ppo"]["max_grad_norm"]
+    self.use_clipped_value_loss = True
 
     # MLPの入力空間
     self.mlp_obs_space = Box(low=-1, high=1, shape=(self.own_obs_dim, ))
     # モデルの行動空間
     self.actijon_space = action_space
 
-    self.optimizer = torch.optim.Adam(self.parameters(), lr=params["ppo"]["lr"])
+    self.optimizer = torch.optim.Adam(self.parameters(), lr=params["wdail"]["lr"], eps=params["wdail"]["eps"])
 
     self.base = MLPBase(self.own_obs_dim, recurrent=False, hidden_size=params["ppo"]["hidden_size"])
 
@@ -60,12 +68,12 @@ class Polkadot(nn.Module):
     return super().to(device)
   
   # input = [g ∈ R^3, v ∈ R^3, depth ∈ R^hidden_dim, neighbor_0 ~ neighbor_n ∈ R^6]
-  def forward_pretrain(self, input):
-    input_neighbors = input[:, 6+self.vae_latent_dim:]
-    output_neighbors = self.model_neighbors(input_neighbors)
-    input_ppo = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
-    output_ppo = self.action_model({"obs" : input_ppo}, None, None)
-    return output_ppo
+  # def forward_pretrain(self, input):
+  #   input_neighbors = input[:, 6+self.vae_latent_dim:]
+  #   output_neighbors = self.model_neighbors(input_neighbors)
+  #   input_ppo = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
+  #   output_ppo = self.action_model({"obs" : input_ppo}, None, None)
+  #   return output_ppo
 
   """
   Parameters
@@ -83,39 +91,61 @@ class Polkadot(nn.Module):
   action : [vx, vy, vz, |v|, wz]
   """
 
-  def obs_to_vector(self, input_dict):
-    neighbors_num = input_dict["state"][0]
-    # Deep Set
-    input_neighbors = input_dict["neighbors"][0:int(neighbors_num*6)]
-    # Tesorに変換
-    input_neighbors = torch.from_numpy(input_neighbors).unsqueeze(0).to(self.device)
-    deepset_output = self.model_neighbors(input_neighbors)
-    # VAE
-    input_obs = torch.from_numpy(input_dict["depth"]).unsqueeze(0).unsqueeze(0).to(self.device)
-    mu, log_var = self.model_obstacle.encode(input_obs)
-    vae_output = self.model_obstacle.reparameterize(mu, log_var)
+  # def obs_to_vector(self, input_dict):
+  #   print("input_dict: ", input_dict)
+  #   neighbors_num = input_dict["state"][0]
+  #   # Deep Set
+  #   input_neighbors = input_dict["neighbors"][0:int(neighbors_num*6)]
+  #   # Tesorに変換
+  #   input_neighbors = torch.from_numpy(input_neighbors).unsqueeze(0).to(self.device)
+  #   deepset_output = self.model_neighbors(input_neighbors)
+  #   # VAE
+  #   input_obs = torch.from_numpy(input_dict["depth"]).unsqueeze(0).unsqueeze(0).to(self.device)
+  #   mu, log_var = self.model_obstacle.encode(input_obs)
+  #   vae_output = self.model_obstacle.reparameterize(mu, log_var)
 
-    input_state = torch.from_numpy(input_dict["state"][1:]).unsqueeze(0).to(self.device)
-    input_ppo = torch.cat([input_state, vae_output, deepset_output], dim=1)
-    return input_ppo
+  #   input_state = torch.from_numpy(input_dict["state"][1:]).unsqueeze(0).to(self.device)
+  #   input_ppo = torch.cat([input_state, vae_output, deepset_output], dim=1)
+  #   return input_ppo
 
-  def forward(self, input_dict, state, seq_lens):
-    input_ppo = self.obs_to_vector(input_dict)
-    output = self.action_model({"obs" : input_ppo}, state, seq_lens)
-    return output
+  # def forward(self, input_dict, state, seq_lens):
+  #   input_ppo = self.obs_to_vector(input_dict)
+  #   output = self.action_model({"obs" : input_ppo}, state, seq_lens)
+  #   return output
 
-  # def value_function(self):
-  #   value_out, _ = self.value_model({"obs": self._model_in[0]}, self._model_in[1], self._model_in[2])
-  #   return torch.reshape(value_out, [-1])
+  @property
+  def is_recurrent(self):
+    return self.base.is_recurrent
+
+  @property
+  def recurrent_hidden_state_size(self):
+    """Size of rnn_hx."""
+    return self.base.recurrent_hidden_state_size
+  
+  def forward(self, obs, rnn_hxs, masks):
+    deepset_output = self.model_neighbors(obs[:, 6+self.vae_latent_dim:])
+    inputs = torch.cat([obs[:, :6+self.vae_latent_dim], deepset_output], dim=1)
+    return self.base(inputs, rnn_hxs, masks)
 
   def get_value(self, obs, rnn_hxs, masks):
-    inputs = self.obs_to_vector(obs)
-    value, _, _ = self.base(inputs, rnn_hxs, masks)
+    value, _, _ = self.forward(obs, rnn_hxs, masks)
     return value
+  
+  def evaluate_actions(self, inputs, rnn_hxs, masks, action):
+    # value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+    value, actor_features, rnn_hxs = self.forward(inputs, rnn_hxs, masks)
+    dist = self.dist(actor_features)
+
+    action_log_probs = dist.log_probs(action)
+    dist_entropy = dist.entropy().mean()
+
+    return value, action_log_probs, dist_entropy, rnn_hxs
 
   def act(self, obs, rnn_hxs, masks, deterministic=False):
-    inputs = self.obs_to_vector(obs)
-    value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+    # deepset_output = self.model_neighbors(obs[:, 6+self.vae_latent_dim:])
+    # inputs = torch.cat([obs[:, :6+self.vae_latent_dim], deepset_output], dim=1)
+    # value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+    value, actor_features, rnn_hxs = self.forward(obs, rnn_hxs, masks)
     dist = self.dist(actor_features)
 
     if deterministic:
@@ -129,7 +159,7 @@ class Polkadot(nn.Module):
     return value, action, action_log_probs, rnn_hxs
   
   def update(self, rollouts):
-    print("Update Generator Model")
+    # print("Update Generator Model")
     advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
     advantages = (advantages - advantages.mean()) / (
         advantages.std() + 1e-5)
@@ -139,7 +169,7 @@ class Polkadot(nn.Module):
     dist_entropy_epoch = 0
 
     for e in range(self.ppo_epoch):
-        if self.actor_critic.is_recurrent:
+        if self.base.is_recurrent:
             data_generator = rollouts.recurrent_generator(
                 advantages, self.num_mini_batch)
         else:
@@ -152,7 +182,7 @@ class Polkadot(nn.Module):
                     adv_targ = sample
 
             # Reshape to do in a single forward pass for all steps
-            values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
+            values, action_log_probs, dist_entropy, _ = self.evaluate_actions(
                 obs_batch, recurrent_hidden_states_batch, masks_batch,
                 actions_batch)
 
@@ -177,7 +207,7 @@ class Polkadot(nn.Module):
             self.optimizer.zero_grad()
             (value_loss * self.value_loss_coef + action_loss -
               dist_entropy * self.entropy_coef).backward()
-            nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
+            nn.utils.clip_grad_norm_(self.parameters(),
                                       self.max_grad_norm)
             self.optimizer.step()
 

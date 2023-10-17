@@ -8,6 +8,7 @@ import os
 import open3d as o3d
 from scipy.spatial.transform import Rotation
 from skimage.transform import resize
+from ppo_wdail.systems.sim import SimulationManager
 
 class DotAviary(BaseDotAviary):
     """Single agent RL problem: hover at position."""
@@ -29,7 +30,8 @@ class DotAviary(BaseDotAviary):
                  obs: ObservationType=ObservationType.KIN,
                  act: ActionType=ActionType.RPM,
                  params=None,
-                 goal_position=None
+                 goal_position=None, 
+                 test_flag=False
                  ):
         """Initialization of a single agent RL environment.
 
@@ -77,11 +79,25 @@ class DotAviary(BaseDotAviary):
         self.camera_height = params["env"]["camera_height"]
         self.image_size = params["vae"]["image_size"]
         self.max_vel = params["env"]["max_vel"]
+        self.drone_radius = params["env"]["drone_radius"]
         self.goal_position = np.array(goal_position)
         vision_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../data/training/vision/{}.pcd".format(params["env"]["map_name"]))
         self.global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 
+        self.use_sample_depth = test_flag
+        self.sim_manager = SimulationManager(params)
+        self._resetReward()
+
     ################################################################################
+
+    def _resetReward(self):
+        self.reward_dict = {
+            "reward_survive": [],
+            "reward_goal": [],
+            "reward_forward": [],
+            "reward_collision": [],
+        }
+        return
     
     def _computeReward(self):
         """Computes the current reward value.
@@ -92,7 +108,22 @@ class DotAviary(BaseDotAviary):
             The reward.
 
         """
-        return -1
+        state = self._getDroneStateVector(0)# p(3), q(4), rpy(3), v(3), w(3), rpm(4)
+        distance_to_go = np.linalg.norm(self.goal_position - state[0:3])
+        vel_norm = np.linalg.norm(state[10:13])
+        point_num, idx = self.sim_manager.get_nearby_points(state[0:3], radius=self.drone_radius)
+        # print("point_num: ", point_num, "idx: ", idx)
+
+        self.reward_dict["reward_survive"].append(1.0)
+        self.reward_dict["reward_goal"].append(-distance_to_go)
+        self.reward_dict["reward_forward"].append(vel_norm)
+        self.reward_dict["reward_collision"].append(-point_num)
+
+        # dict内のkeyの配列の最後の要素を返す
+        reward = 0
+        for key in self.reward_dict.keys():
+            reward += self.reward_dict[key][-1]
+        return reward
 
     ################################################################################
     
@@ -106,10 +137,8 @@ class DotAviary(BaseDotAviary):
 
         """
         # TODO: DONEの条件を変更する
-        if self.step_counter/self.SIM_FREQ > self.EPISODE_LEN_SEC:
-            return True
-        else:
-            return False
+        done = self.step_counter/self.SIM_FREQ > self.EPISODE_LEN_SEC
+        return done
 
     ################################################################################
     
@@ -124,9 +153,38 @@ class DotAviary(BaseDotAviary):
             Dummy value.
 
         """
-        return {"answer": 42} #### Calculated by the Deep Thought supercomputer in 7.5M years
+        info = {}
+        reward_accum = 0
+        for key in self.reward_dict.keys():
+            reward_accum += np.sum(self.reward_dict[key])
+            info[key] = self.reward_dict[key][-1]
+        if self._computeDone():
+            info["episode"] = {
+                "r": reward_accum, 
+                "l": self.step_counter/self.AGGR_PHY_STEPS, 
+                "t": self.step_counter/self.SIM_FREQ}
+        return info
+    
+    ################################################################################
+
+    def _beforeReset(self):
+        self._resetReward()
+        # self.sim_manager.destroy_field()
+        return
+    
+    def destoroy_field(self):
+        self.sim_manager.destroy_field()
+        return
 
     ################################################################################
+
+    def _afterStep(self, obs, reward, done, info):
+        if done:
+            obs = self.reset()
+        return obs, reward, done, info
+
+    ################################################################################
+
 
     def _computeDroneObservation(self, state):
 
@@ -164,50 +222,55 @@ class DotAviary(BaseDotAviary):
         normalized_v_i = clipped_v_i / MAX_LIN_VEL
 
         state_processed = np.concatenate((normalized_goal, normalized_v_i))
-        depth = self._getDroneVision(state)
+        if self.use_sample_depth:
+            depth = np.zeros((128, 128))
+            return state_processed, depth
+
+        # depth = self._getDroneVision(state)
+        depth = self.sim_manager.get_local_observation(p_i_world, q_i_world, pc=self.global_map_world_pc)
 
         return state_processed, depth
 
     ################################################################################
 
-    def _getDroneVision(self, state):
-        # Create a visualization window
-        vis = o3d.visualization.Visualizer()
-		# デプス画像が上手く表示されない場合は、visible=Trueにする
-        vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
-        render_option = vis.get_render_option()  
-        render_option.point_size = 10.0
-        vis.add_geometry(self.global_map_world_pc)
-        view_control = vis.get_view_control()
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
+    # def _getDroneVision(self, state):
+    #     # Create a visualization window
+    #     self.vis = o3d.visualization.Visualizer()
+	# 	# デプス画像が上手く表示されない場合は、visible=Trueにする
+    #     self.vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
+    #     render_option = self.vis.get_render_option()  
+    #     render_option.point_size = 10.0
+    #     self.vis.add_geometry(self.global_map_world_pc)
+    #     view_control = self.vis.get_view_control()
+    #     intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
 
-        # カメラの姿勢を設定
-        rot_1 = np.eye(4)
-        rot_2 = np.eye(4)
-        pos = state[0:3]
-        quat = np.quaternion(state[3], state[4], state[5], state[6])
-        attitude = quaternion.as_rotation_matrix(quat)
-        rot_1[:3, 3] = - pos
-        align_mat = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
-        rot_2[:3,:3] = np.dot(attitude, align_mat)
-        pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
-        pinhole_parameters.intrinsic = intrinsic
-        pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
+    #     # カメラの姿勢を設定
+    #     rot_1 = np.eye(4)
+    #     rot_2 = np.eye(4)
+    #     pos = state[0:3]
+    #     quat = np.quaternion(state[3], state[4], state[5], state[6])
+    #     attitude = quaternion.as_rotation_matrix(quat)
+    #     rot_1[:3, 3] = - pos
+    #     align_mat = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
+    #     rot_2[:3,:3] = np.dot(attitude, align_mat)
+    #     pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
+    #     pinhole_parameters.intrinsic = intrinsic
+    #     pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
 
-        view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
-        # vis.run()
-        depth_image = vis.capture_depth_float_buffer(do_render=True)
-        depth_image = np.array(depth_image)
-        depth_image_exp = np.exp(-depth_image)
-        depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
-        # 最大値によるダウンサンプリング
-        # downsampled_image = self.downsample_max(depth_image_exp_bg, self.downsampling_factor)
-        # バイキュービック補完によるダウンサンプリング
-        downsampled_image = resize(depth_image_exp_bg, self.image_size)
-        vis.remove_geometry(self.global_map_world_pc)
-        vis.destroy_window()
+    #     view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
+    #     # vis.run()
+    #     depth_image = self.vis.capture_depth_float_buffer(do_render=True)
+    #     depth_image = np.array(depth_image)
+    #     depth_image_exp = np.exp(-depth_image)
+    #     depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
+    #     # 最大値によるダウンサンプリング
+    #     # downsampled_image = self.downsample_max(depth_image_exp_bg, self.downsampling_factor)
+    #     # バイキュービック補完によるダウンサンプリング
+    #     downsampled_image = resize(depth_image_exp_bg, self.image_size)
+    #     self.vis.remove_geometry(self.global_map_world_pc)
+    #     self.vis.destroy_window()
 
-        return downsampled_image
+    #     return downsampled_image
     
     ################################################################################
     
