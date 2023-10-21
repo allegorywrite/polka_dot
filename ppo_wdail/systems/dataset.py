@@ -1,6 +1,6 @@
 import torch
 from ppo_wdail.systems.datagenerator import DataGenerator
-from VAE.models.vanilla_vae import VanillaVAE
+from VAE.models.swae import SWAE
 import numpy as np
 import os
 import pickle
@@ -46,8 +46,7 @@ class ExpertDataLoader(torch.utils.data.Dataset):
             print("dataset loaded from ", os.path.join(os.path.dirname(os.path.abspath(__file__)), '../cache/cache_id{}.pkl'.format(idx)))
             return dataset
         train_dataset_dict, test_dataset_dict = self.data_generator.load_data(idx)
-        model = VanillaVAE(in_channels = self.params["vae"]["in_channels"], latent_dim=self.params["vae"]["latent_dim"])
-        model.to(self.device)
+        model = SWAE(**self.params["swae"]).to(self.device)
         model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
         model.load_state_dict(torch.load(model_load_path, map_location=self.device))
         model.eval()
@@ -94,7 +93,7 @@ class ExpertDataset(torch.utils.data.Dataset):
         # TODO: use_preprocessed_dataに対応
         if not use_preprocessed_data:
             self.data_generator.generate_data()
-            ntrain, ntest, file_batch_num = len(self.data_generator)
+            ntrain, ntest, file_batch_num = self.data_generator.__len__()
             print("Total Train Dataset Size: ", ntrain, " Total Test Dataset Size: ", ntest, "File Batch Size: ", file_batch_num)
             self.file_batch_num = file_batch_num
 
@@ -104,8 +103,7 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.load_neighbors = None
         self.trajectory = {}
 
-        self.encoder = VanillaVAE(in_channels = self.params["vae"]["in_channels"], latent_dim=self.params["vae"]["latent_dim"])
-        self.encoder.to(self.device)
+        self.encoder = SWAE(**self.params["swae"]).to(self.device)
         model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
         self.encoder.load_state_dict(torch.load(model_load_path, map_location=self.device))
         self.encoder.eval()
@@ -134,8 +132,8 @@ class ExpertDataset(torch.utils.data.Dataset):
         for i in range(len(train_dataset)):
             item = train_dataset[i]
             if self.save_memory:
-                z = item[4]
-                print("Shape of Encoded Depth: ", z.shape)
+                z = torch.from_numpy(item[4])
+                # print("Shape of Encoded Depth: ", z.shape)
             else:
                 if i % 1000 == 0:
                     print("Encoding Progress: ", i, "/", len(train_dataset))

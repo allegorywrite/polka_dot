@@ -1,6 +1,13 @@
 import numpy as np
 import quaternion
 
+def get_quaternion_from_euler(roll, pitch, yaw):
+    qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+    qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+    qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    return  quaternion.as_quat_array([qw, qx, qy, qz])
+
 def safe_as_rotation_matrix(q):
     if np.abs(np.linalg.norm(quaternion.as_float_array(q))) < 1e-8:
         return np.identity(3)

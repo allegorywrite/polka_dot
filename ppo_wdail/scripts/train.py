@@ -13,10 +13,11 @@ from ppo_wdail.models.discriminator import Discriminator
 from ppo_wdail.systems.dataset import ExpertDataLoader, ExpertDataset
 
 import argparse
+import numpy as np
 
 # Wasserstein Distance guided Adversarial Imitation Learning (WDAIL)の学習
 
-def train(test_flag=False):
+def train(test_flag=False, use_preprocessed_data=False):
     print("test_flag: ", test_flag)
     print("hello world")
 
@@ -30,17 +31,21 @@ def train(test_flag=False):
     with open(yaml_path, 'r') as f:
         params = yaml.load(f, Loader=yaml.SafeLoader)
 
+    INIT_XYZS = np.array([[0, 0, 1]])
+    INIT_RPYS = np.array([[0, 0, 0]])
+
     # 環境の登録
     obs_type = ObservationType.VIS
     act_type = ActionType.VEL5D
     env = DotAviary(params=params,
-                    # num_drones=params["env"]["num_drones"],
+                    initial_xyzs=INIT_XYZS,
+                    initial_rpys=INIT_RPYS,
                     aggregate_phy_steps=shared_constants.AGGR_PHY_STEPS,
                     obs=obs_type,
                     act=act_type,
                     freq=params["env"]["frequency"],
                     goal_position=(1, 1, 1),
-                    gui=False,
+                    gui=True,
                     record=False,
                     test_flag=test_flag
                     )
@@ -86,7 +91,8 @@ def train(test_flag=False):
     gail_train_dataset = ExpertDataset(
         params=params, 
         device=device, 
-        use_preprocessed_data=True
+        use_preprocessed_data=use_preprocessed_data,
+        save_memory=True
     )
 
     # モデルの学習
@@ -103,5 +109,6 @@ def train(test_flag=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--test_flag', action='store_true')
+    parser.add_argument('--use_preprocessed_data', action='store_true')
     args = parser.parse_args()
-    train(test_flag=args.test_flag)
+    train(test_flag=args.test_flag, use_preprocessed_data=args.use_preprocessed_data)

@@ -9,6 +9,8 @@ import open3d as o3d
 from scipy.spatial.transform import Rotation
 from skimage.transform import resize
 from ppo_wdail.systems.sim import SimulationManager
+import ppo_wdail.tools.utils as utils
+import pybullet as p
 
 class DotAviary(BaseDotAviary):
     """Single agent RL problem: hover at position."""
@@ -111,7 +113,7 @@ class DotAviary(BaseDotAviary):
         state = self._getDroneStateVector(0)# p(3), q(4), rpy(3), v(3), w(3), rpm(4)
         distance_to_go = np.linalg.norm(self.goal_position - state[0:3])
         vel_norm = np.linalg.norm(state[10:13])
-        point_num, idx = self.sim_manager.get_nearby_points(state[0:3], radius=self.drone_radius)
+        point_num, idx = self.sim_manager.get_nearby_points(state[0:3], radius=self.drone_radius, pc=self.global_map_world_pc)
         # print("point_num: ", point_num, "idx: ", idx)
 
         self.reward_dict["reward_survive"].append(1.0)
@@ -207,7 +209,7 @@ class DotAviary(BaseDotAviary):
         MAX_PITCH_ROLL = np.pi # Full range
 
         p_i_world = state[0:3]
-        q_i_world = np.quaternion(state[3], state[4], state[5], state[6])
+        q_i_world = np.quaternion(state[6], state[3], state[4], state[5])
         v_i_world = state[10:13]
         w_i_world = state[13:16]
 
@@ -225,6 +227,13 @@ class DotAviary(BaseDotAviary):
         if self.use_sample_depth:
             depth = np.zeros((128, 128))
             return state_processed, depth
+        
+        # print("origin:",p.getEulerFromQuaternion(q_i_world.components))
+        # roll = 0
+        # pitch = 0
+        # yaw = 1
+        # quat = utils.euler_to_quaternion(roll, pitch, yaw)
+        # print("q_i_world:", p.getEulerFromQuaternion([quat.components[1], quat.components[2], quat.components[3], quat.components[0]]))
 
         # depth = self._getDroneVision(state)
         depth = self.sim_manager.get_local_observation(p_i_world, q_i_world, pc=self.global_map_world_pc)

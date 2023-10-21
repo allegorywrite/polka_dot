@@ -5,6 +5,7 @@ import open3d as o3d
 import numpy as np
 import quaternion
 import matplotlib.pyplot as plt
+import ppo_wdail.tools.utils as utils
 
 def random_camera_pos(map_lower_bound, map_upper_bound):
     # map_lower_boundとmap_upper_boundの間でランダムな位置を設定
@@ -17,12 +18,16 @@ def random_camera_attitude(quat=False):
     angle_1 = np.random.uniform(low=-np.pi/6, high=np.pi/6, size=2)
     angle_2 = np.random.uniform(low=-np.pi, high=np.pi, size=1)
 
-    roll = angle_1[0]
-    pitch = angle_1[1]
-    yaw = angle_2[0]
+    # roll = angle_1[0]
+    # pitch = angle_1[1]
+    # yaw = angle_2[0]
+    roll = 0
+    pitch = 10
+    yaw = 0
 
     if quat:
-        return quaternion.from_euler_angles([roll, pitch, yaw])
+        # return quaternion.from_euler_angles([roll, pitch, yaw])
+        return utils.euler_to_quaternion(roll, pitch, yaw)
         
     # 回転行列を計算
     Rx = np.array([[1, 0, 0],
@@ -53,9 +58,9 @@ if __name__ == "__main__":
 
     sim_manager = SimulationManager(params=params)
     sim_manager.create_volume_field(global_map_world_pc)
-    sim_manager.viz_run()
+    # sim_manager.viz_run()
     
-    image = sim_manager.get_local_observation(random_camera_pos(2,3), random_camera_attitude(quat=True))
+    image = sim_manager.get_local_observation(np.array([0,0,-5]), random_camera_attitude(quat=True), visible=True)
 
     # imageを描画
     plt.imshow(image)

@@ -406,6 +406,7 @@ class BaseDotAviary(BaseAviary):
         elif self.OBS_TYPE == ObservationType.VIS:
             state, depth = self._computeDroneObservation(self._getDroneStateVector(0))
             obs ={
+                "full_state": self._getDroneStateVector(0),
                 "state": state,
                 "depth": depth
             }

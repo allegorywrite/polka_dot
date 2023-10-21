@@ -11,10 +11,7 @@ from swarm.system.utils import *
 
 class SimulationManager:
 
-    def __init__(self):
-        yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/params.yaml")
-        with open(yaml_path, 'r') as f:
-            params = yaml.load(f, Loader=yaml.SafeLoader)
+    def __init__(self, params):
         self.camera_width = params["env"]["camera_width"]
         self.camera_height = params["env"]["camera_height"]
         self.target_dim = params["vae"]["image_size"]
@@ -25,10 +22,14 @@ class SimulationManager:
         self.dim_per_drone = 14
         self.t_start = 0
         self.field_enabled = False
+        self.global_map_world_pc = None
+        self.pcd_tree = None
 
     def create_field(self, global_map_world_pc, visible=True):
         if self.field_enabled:
             return
+        self.global_map_world_pc = global_map_world_pc
+        self.pcd_tree = o3d.geometry.KDTreeFlann(global_map_world_pc)
         self.o3d_vis = o3d.visualization.Visualizer()
         self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=visible)
         render_option = self.o3d_vis.get_render_option()  
@@ -36,7 +37,39 @@ class SimulationManager:
         self.o3d_vis.add_geometry(global_map_world_pc)
         self.field_enabled = True
 
-    def destroy_field(self, global_map_world_pc):
+    def create_volume_field(self, global_map_world_pc, visible=True, box_size=0.1):
+        if self.field_enabled:
+            return
+        self.global_map_world_pc = global_map_world_pc
+
+        # Convert point cloud to voxel grid
+        box_mesh = o3d.geometry.VoxelGrid.create_from_point_cloud(global_map_world_pc, voxel_size=box_size)
+            
+        self.o3d_vis = o3d.visualization.Visualizer()
+        self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=visible)
+        self.o3d_vis.add_geometry(box_mesh)
+        self.field_enabled = True
+
+    
+    def viz_run(self):
+        self.o3d_vis.run()
+
+    # 最も近い点の距離配列を取得
+    def get_nearby_points(self, p, radius=None, point_num=None):
+        if radius is not None:
+            # 半径を利用した最近傍点計算
+            [k, idx, _] = self.pcd_tree.search_radius_vector_3d(p, radius)
+            return k, idx
+        # KDTreeによる最近傍点計算
+        if point_num is None:
+            point_num = 1
+        [k, idx, _] = self.pcd_tree.search_knn_vector_3d(p, point_num)
+        return k, idx
+
+
+    def destroy_field(self, global_map_world_pc=None):
+        if global_map_world_pc is None:
+            global_map_world_pc = self.global_map_world_pc
         if self.field_enabled:
             self.o3d_vis.remove_geometry(global_map_world_pc)
             self.o3d_vis.destroy_window()
@@ -67,7 +100,11 @@ class SimulationManager:
         mesh_sphere_begin.paint_uniform_color(color)
         return mesh_arrow, mesh_sphere_begin
 
-    def get_local_observation(self, p_i_world, q_i_world):
+    def get_local_observation(self, p_i_world, q_i_world, pc=None):
+        if not self.field_enabled:
+            if pc is None:
+                raise ValueError("pc is None")
+            self.create_field(pc, visible=True)
         view_control = self.o3d_vis.get_view_control()
         intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
 

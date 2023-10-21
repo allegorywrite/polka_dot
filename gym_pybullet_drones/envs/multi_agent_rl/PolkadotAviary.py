@@ -6,9 +6,10 @@ import yaml
 import open3d as o3d
 from scipy.spatial.transform import Rotation
 from skimage.transform import resize
+from ppo_wdail.systems.sim import SimulationManager
 
 from gym_pybullet_drones.utils.enums import DroneModel, Physics
-from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
+from gym_pybullet_drones.envs.single_agent_rl.BaseDotAviary import ActionType, ObservationType
 from gym_pybullet_drones.envs.multi_agent_rl.BasePolkadotAviary import BasePolkadotAviary
 
 class PolkadotAviary(BasePolkadotAviary):
@@ -31,7 +32,9 @@ class PolkadotAviary(BasePolkadotAviary):
                  record=False, 
                  goal_position=None,
                  obs: ObservationType=ObservationType.KIN,
-                 act: ActionType=ActionType.RPM):
+                 act: ActionType=ActionType.RPM,
+                 params=None,
+                 ):
 
         super().__init__(drone_model=drone_model,
                          num_drones=num_drones,
@@ -47,32 +50,56 @@ class PolkadotAviary(BasePolkadotAviary):
                          act=act
                          )
         
-        # パラメータの読み込み
-        yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../swarm/config/params.yaml")
-        with open(yaml_path, 'r') as f:
-            params = yaml.load(f, Loader=yaml.SafeLoader)
         self.sencing_radius = params["env"]["sencing_radius"]
         self.goal_horizon = params["env"]["goal_horizon"]
         self.camera_width = params["env"]["camera_width"]
         self.camera_height = params["env"]["camera_height"]
         self.image_size = params["vae"]["image_size"]
         self.max_vel = params["env"]["max_vel"]
+        self.drone_radius = params["env"]["drone_radius"]
         self.goal_position = np.array(goal_position)
         vision_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../data/training/vision/{}.pcd".format(params["env"]["map_name"]))
         self.global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 
+        
+        self.sim_manager = {i: SimulationManager(params) for i in range(self.NUM_DRONES)}
+        self._resetReward()
+
     ################################################################################
 
+    def _resetReward(self):
+        reward = {
+            "reward_survive": [],
+            "reward_goal": [],
+            "reward_forward": [],
+            "reward_collision": [],
+        }
+        self.reward_dict = {i: reward for i in range(self.NUM_DRONES)}
+        return
+    
     def _computeReward(self):
-        rewards = {}
         for i in range(0, self.NUM_DRONES):
-            rewards[i] = -1
+            state = self._getDroneStateVector(i)# p(3), q(4), rpy(3), v(3), w(3), rpm(4)
+            distance_to_go = np.linalg.norm(self.goal_position - state[0:3])
+            vel_norm = np.linalg.norm(state[10:13])
+            point_num, idx = self.sim_manager[i].get_nearby_points(state[0:3], radius=self.drone_radius, pc=self.global_map_world_pc)
+            # print("point_num: ", point_num, "idx: ", idx)
+
+            self.reward_dict[i]["reward_survive"].append(1.0)
+            self.reward_dict[i]["reward_goal"].append(-distance_to_go)
+            self.reward_dict[i]["reward_forward"].append(vel_norm)
+            self.reward_dict[i]["reward_collision"].append(-point_num)
+
+        rewards = np.zeros(self.NUM_DRONES)
+        for i in range(0, self.NUM_DRONES):
+            for key in self.reward_dict[i].keys():
+                rewards[i] += self.reward_dict[i][key][-1]
         return rewards
 
     ################################################################################
     
     def _computeDone(self):
-        bool_val = False
+        bool_val = self.step_counter/self.SIM_FREQ > self.EPISODE_LEN_SEC
         done = {i: bool_val for i in range(self.NUM_DRONES)}
         done["__all__"] = True if True in done.values() else False
         return done
@@ -80,11 +107,41 @@ class PolkadotAviary(BasePolkadotAviary):
     ################################################################################
     
     def _computeInfo(self):
-        return {i: {} for i in range(self.NUM_DRONES)}
+        info = {i: {} for i in range(self.NUM_DRONES)}
+        for i in range(0, self.NUM_DRONES):
+            reward_accum = 0
+            for key in self.reward_dict[i].keys():
+                reward_accum += np.sum(self.reward_dict[i][key])
+                info[i][key] = self.reward_dict[i][key][-1]
+            if self._computeDone():
+                info[i]["episode"] = {
+                    "r": reward_accum, 
+                    "l": self.step_counter/self.AGGR_PHY_STEPS, 
+                    "t": self.step_counter/self.SIM_FREQ}
+        return info
 
     ################################################################################
 
-    def _computeDroneObservation(self, state, neighbors_state):
+    def _beforeReset(self):
+        self._resetReward()
+        # self.sim_manager.destroy_field()
+        return
+    
+    def destoroy_field(self):
+        for i in range(self.NUM_DRONES):
+            self.sim_manager[i].destroy_field()
+        return
+    
+    ################################################################################
+
+    def _afterStep(self, obs, reward, done, info):
+        if done["__all__"]:
+            obs = self.reset()
+        return obs, reward, done, info
+
+    ################################################################################
+
+    def _computeDroneObservation(self, state, neighbors_state, drone_id):
         
         """
         Parameters
@@ -104,7 +161,7 @@ class PolkadotAviary(BasePolkadotAviary):
         MAX_PITCH_ROLL = np.pi # Full range
 
         p_i_world = state[0:3]
-        q_i_world = np.quaternion(state[3], state[4], state[5], state[6])
+        q_i_world = np.quaternion(state[6], state[3], state[4], state[5])
         v_i_world = state[10:13]
         w_i_world = state[13:16]
 
@@ -118,72 +175,71 @@ class PolkadotAviary(BasePolkadotAviary):
         clipped_v_i = np.clip(v_i_world, -MAX_LIN_VEL, MAX_LIN_VEL)
         normalized_v_i = clipped_v_i / MAX_LIN_VEL
 
-        neighbor_drones_num = 0
         neighbors_state_processed = np.zeros(6*(self.NUM_DRONES-1))
-        for j in range(0, self.NUM_DRONES-1):
-            p_j_world = neighbors_state[j][0:3]
-            neighbor_distance = np.linalg.norm(p_j_world - p_i_world)
-            if neighbor_distance > self.sencing_radius:
-                continue
-            v_j_world = neighbors_state[j][10:13]
-            w_j_world = neighbors_state[j][13:16]
-            p_ij_local = np.dot(R_inverse_iw, p_j_world - p_i_world)
-            v_ij_local = np.dot(R_inverse_iw, v_j_world)
-            clipped_p_j = np.clip(p_ij_local, -self.sencing_radius, self.sencing_radius)
-            clipped_v_j = np.clip(v_ij_local, -MAX_LIN_VEL, MAX_LIN_VEL)
-            normalized_p_j = clipped_p_j / self.sencing_radius
-            normalized_v_j = clipped_v_j / MAX_LIN_VEL
-            # 相対速度で計算する場合
-			# v_ij_local = np.dot(R_inverse_iw, v_j_world - v_i_world) + np.cross(w_i_world, p_ij_local)
-            state_clipped_and_normalized = np.concatenate((normalized_p_j, normalized_v_j))
-            neighbors_state_processed[6*j:6*(j+1)] = state_clipped_and_normalized
-            neighbor_drones_num += 1
+        # for j in range(0, self.NUM_DRONES-1):
+        #     p_j_world = neighbors_state[j][0:3]
+        #     neighbor_distance = np.linalg.norm(p_j_world - p_i_world)
+        #     if neighbor_distance > self.sencing_radius:
+        #         continue
+        #     v_j_world = neighbors_state[j][10:13]
+        #     w_j_world = neighbors_state[j][13:16]
+        #     p_ij_local = np.dot(R_inverse_iw, p_j_world - p_i_world)
+        #     v_ij_local = np.dot(R_inverse_iw, v_j_world)
+        #     clipped_p_j = np.clip(p_ij_local, -self.sencing_radius, self.sencing_radius)
+        #     clipped_v_j = np.clip(v_ij_local, -MAX_LIN_VEL, MAX_LIN_VEL)
+        #     normalized_p_j = clipped_p_j / self.sencing_radius
+        #     normalized_v_j = clipped_v_j / MAX_LIN_VEL
+        #     # 相対速度で計算する場合
+		# 	# v_ij_local = np.dot(R_inverse_iw, v_j_world - v_i_world) + np.cross(w_i_world, p_ij_local)
+        #     state_clipped_and_normalized = np.concatenate((normalized_p_j, normalized_v_j))
+        #     neighbors_state_processed[6*j:6*(j+1)] = state_clipped_and_normalized
+        #     neighbor_drones_num += 1
         
-        state_processed = np.concatenate((np.array([neighbor_drones_num]), normalized_goal, normalized_v_i))
-        depth = self._getDroneVision(state)
+        state_processed = np.concatenate((normalized_goal, normalized_v_i))
+        depth = self.sim_manager[drone_id].get_local_observation(p_i_world, q_i_world, pc=self.global_map_world_pc)
         
         return state_processed, neighbors_state_processed, depth
     
     ################################################################################
 
-    def _getDroneVision(self, state):
-        # Create a visualization window
-        vis = o3d.visualization.Visualizer()
-		# デプス画像が上手く表示されない場合は、visible=Trueにする
-        vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
-        render_option = vis.get_render_option()  
-        render_option.point_size = 10.0
-        vis.add_geometry(self.global_map_world_pc)
-        view_control = vis.get_view_control()
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
+    # def _getDroneVision(self, state):
+    #     # Create a visualization window
+    #     vis = o3d.visualization.Visualizer()
+	# 	# デプス画像が上手く表示されない場合は、visible=Trueにする
+    #     vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=True)
+    #     render_option = vis.get_render_option()  
+    #     render_option.point_size = 10.0
+    #     vis.add_geometry(self.global_map_world_pc)
+    #     view_control = vis.get_view_control()
+    #     intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
 
-        # カメラの姿勢を設定
-        rot_1 = np.eye(4)
-        rot_2 = np.eye(4)
-        pos = state[0:3]
-        quat = np.quaternion(state[3], state[4], state[5], state[6])
-        attitude = quaternion.as_rotation_matrix(quat)
-        rot_1[:3, 3] = - pos
-        align_mat = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
-        rot_2[:3,:3] = np.dot(attitude, align_mat)
-        pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
-        pinhole_parameters.intrinsic = intrinsic
-        pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
+    #     # カメラの姿勢を設定
+    #     rot_1 = np.eye(4)
+    #     rot_2 = np.eye(4)
+    #     pos = state[0:3]
+    #     quat = np.quaternion(state[3], state[4], state[5], state[6])
+    #     attitude = quaternion.as_rotation_matrix(quat)
+    #     rot_1[:3, 3] = - pos
+    #     align_mat = np.dot(Rotation.from_euler('y', -90, degrees=True).as_matrix(), Rotation.from_euler('x', 90, degrees=True).as_matrix())
+    #     rot_2[:3,:3] = np.dot(attitude, align_mat)
+    #     pinhole_parameters = view_control.convert_to_pinhole_camera_parameters()
+    #     pinhole_parameters.intrinsic = intrinsic
+    #     pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
 
-        view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
-        # vis.run()
-        depth_image = vis.capture_depth_float_buffer(do_render=True)
-        depth_image = np.array(depth_image)
-        depth_image_exp = np.exp(-depth_image)
-        depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
-        # 最大値によるダウンサンプリング
-        # downsampled_image = self.downsample_max(depth_image_exp_bg, self.downsampling_factor)
-        # バイキュービック補完によるダウンサンプリング
-        downsampled_image = resize(depth_image_exp_bg, self.image_size)
-        vis.remove_geometry(self.global_map_world_pc)
-        vis.destroy_window()
+    #     view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
+    #     # vis.run()
+    #     depth_image = vis.capture_depth_float_buffer(do_render=True)
+    #     depth_image = np.array(depth_image)
+    #     depth_image_exp = np.exp(-depth_image)
+    #     depth_image_exp_bg = np.where(depth_image_exp==1, 0, depth_image_exp)
+    #     # 最大値によるダウンサンプリング
+    #     # downsampled_image = self.downsample_max(depth_image_exp_bg, self.downsampling_factor)
+    #     # バイキュービック補完によるダウンサンプリング
+    #     downsampled_image = resize(depth_image_exp_bg, self.image_size)
+    #     vis.remove_geometry(self.global_map_world_pc)
+    #     vis.destroy_window()
 
-        return downsampled_image
+    #     return downsampled_image
 
     ################################################################################
 

@@ -10,6 +10,24 @@ import ppo_wdail.tools.config as config
 import numpy as np
 import random
 
+import quaternion
+
+import numpy as np
+from pyquaternion import Quaternion
+from scipy.spatial.transform import Rotation as R
+
+def quaternion_to_euler(q):
+    q = q.components
+    r = R.from_quat([q[0], q[1], q[2], q[3]])
+    return r.as_euler('zyx', degrees=True)
+
+def euler_to_quaternion(roll, pitch, yaw):
+    qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+    qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+    qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    return  quaternion.as_quat_array([qw, qx, qy, qz])
+
 # Get a render function
 def get_render_func(venv):
     if hasattr(venv, 'envs'):

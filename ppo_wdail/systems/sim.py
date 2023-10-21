@@ -28,6 +28,7 @@ class SimulationManager:
     def create_field(self, global_map_world_pc, visible=True):
         if self.field_enabled:
             return
+        print("create_field")
         self.global_map_world_pc = global_map_world_pc
         self.pcd_tree = o3d.geometry.KDTreeFlann(global_map_world_pc)
         self.o3d_vis = o3d.visualization.Visualizer()
@@ -40,11 +41,11 @@ class SimulationManager:
     def create_volume_field(self, global_map_world_pc, visible=True, box_size=0.1):
         if self.field_enabled:
             return
+        print("create_volume_field")
         self.global_map_world_pc = global_map_world_pc
-
+        self.pcd_tree = o3d.geometry.KDTreeFlann(global_map_world_pc)
         # Convert point cloud to voxel grid
         box_mesh = o3d.geometry.VoxelGrid.create_from_point_cloud(global_map_world_pc, voxel_size=box_size)
-            
         self.o3d_vis = o3d.visualization.Visualizer()
         self.o3d_vis.create_window(window_name='3D Viewer', width=self.camera_width, height=self.camera_height, visible=visible)
         self.o3d_vis.add_geometry(box_mesh)
@@ -55,7 +56,14 @@ class SimulationManager:
         self.o3d_vis.run()
 
     # 最も近い点の距離配列を取得
-    def get_nearby_points(self, p, radius=None, point_num=None):
+    def get_nearby_points(self, p, radius=None, point_num=None, pc=None):
+        # print("field_enabled = {}".format(self.field_enabled))
+        # print("pointcloud_len = {}".format(len(self.global_map_world_pc.points)))
+        if not self.field_enabled:
+            if pc is None:
+                raise ValueError("pc is None")
+            self.create_volume_field(pc, visible=True)
+
         if radius is not None:
             # 半径を利用した最近傍点計算
             [k, idx, _] = self.pcd_tree.search_radius_vector_3d(p, radius)
@@ -71,6 +79,7 @@ class SimulationManager:
         if global_map_world_pc is None:
             global_map_world_pc = self.global_map_world_pc
         if self.field_enabled:
+            print("Destroy")
             self.o3d_vis.remove_geometry(global_map_world_pc)
             self.o3d_vis.destroy_window()
             self.field_enabled = False
@@ -100,11 +109,11 @@ class SimulationManager:
         mesh_sphere_begin.paint_uniform_color(color)
         return mesh_arrow, mesh_sphere_begin
 
-    def get_local_observation(self, p_i_world, q_i_world, pc=None):
+    def get_local_observation(self, p_i_world, q_i_world, pc=None, visible=False):
         if not self.field_enabled:
             if pc is None:
                 raise ValueError("pc is None")
-            self.create_field(pc, visible=True)
+            self.create_volume_field(pc, visible=True)
         view_control = self.o3d_vis.get_view_control()
         intrinsic = o3d.camera.PinholeCameraIntrinsic(self.camera_width, self.camera_height, fx=386.0, fy=386.0, cx=self.camera_width/2 - 0.5, cy=self.camera_height/2 -0.5)
 
@@ -119,7 +128,8 @@ class SimulationManager:
         pinhole_parameters.extrinsic = np.dot(rot_2, rot_1)
 
         view_control.convert_from_pinhole_camera_parameters(pinhole_parameters)	
-        # self.o3d_vis.run()
+        if visible:
+            self.o3d_vis.run()
         depth_image = self.o3d_vis.capture_depth_float_buffer(do_render=True)
         depth_image = np.array(depth_image)
         depth_image_exp = np.exp(-depth_image)
@@ -147,6 +157,14 @@ class SimulationManager:
         normalized_goal_local = goal_local / self.goal_horizon
 
         return normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local
+    
+    def get_processed_action(self, p_i_world, q_i_world, w_i_world, p_next):
+        R_inverse_iw = safe_as_rotation_matrix(q_i_world.conjugate())
+        action_liner = np.dot(R_inverse_iw, p_next - p_i_world)
+        yaw_rate = np.dot(R_inverse_iw, w_i_world)[2]
+        clipped_speed = np.clip(np.linalg.norm(action_liner), 0, self.max_vel)
+        normalized_speed = clipped_speed / self.max_vel
+        return np.array([action_liner[0], action_liner[1], action_liner[2], normalized_speed, yaw_rate])
     
     def transform_to_local(self, replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, goal_i):
         # Observation(Local座標型)
@@ -303,7 +321,7 @@ def sim():
     # simplay_data = replay_data[0]
     simplay_data = np.vstack([simplay_data, replay_data[0]])
     # シミュレーション
-    sim_manager.create_field(global_map_world_pc)
+    sim_manager.create_volume_field(global_map_world_pc)
     sim_count = 10
     for sim_itr in range(sim_count):
         snapshot_data = []

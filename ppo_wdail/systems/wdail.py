@@ -9,12 +9,14 @@ import os
 import shutil
 
 from VAE.models.vanilla_vae import VanillaVAE
+from VAE.models.swae import SWAE
 
 def obs_to_vector(obs, model, gail_train_loader, neighbors_num, device):
     state = torch.from_numpy(obs["state"]).to(device) 
-    depth = torch.from_numpy(obs["depth"]).unsqueeze(0).unsqueeze(0).to(device).float()
-    mu, log_var = model.encode(depth)        
-    z = model.reparameterize(mu, log_var).squeeze(0).detach()
+    # depth = torch.from_numpy(obs["depth"]).unsqueeze(0).unsqueeze(0).to(device).float()
+    # mu, log_var = model.encode(depth)        
+    # z = model.reparameterize(mu, log_var).squeeze(0).detach()
+    z = model.embedding(obs["depth"], device)
     if obs.get("neighbor", False):
         neighbor = torch.from_numpy(obs["neighbor"]).to(device)
     else:
@@ -53,7 +55,8 @@ def wdail_train(params, env, agent, discriminator, rollouts, gail_train_dataset,
     
     write_result = utils.Write_Result(params=params)
 
-    vision_encoder = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=params["vae"]["latent_dim"])
+    # vision_encoder = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=params["vae"]["latent_dim"])
+    vision_encoder = SWAE(**params["swae"])
     model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
     vision_encoder.to(device)
     vision_encoder.load_state_dict(torch.load(model_load_path, map_location=device))

@@ -2,6 +2,7 @@
 import torch.nn as nn
 from swarm.models.deepset import DeepSet
 from VAE.models.vanilla_vae import VanillaVAE
+from VAE.models.swae import SWAE
 from gym.spaces import Box, Dict
 import torch
 import yaml
@@ -20,12 +21,13 @@ class Polkadot(nn.Module):
     # DeepSetの出力次元
     self.deepset_latent_dim = params["deepset"]["latent_dim"]
     # VAEの出力次元
-    self.vae_latent_dim = params["vae"]["latent_dim"]
+    self.swae_latent_dim = params["swae"]["latent_dim"]
     # PPOの入力次元
-    self.own_obs_dim = self.state_dim + self.vae_latent_dim + self.deepset_latent_dim
+    self.own_obs_dim = self.state_dim + self.swae_latent_dim + self.deepset_latent_dim
 
     self.model_neighbors = DeepSet(self.state_dim, self.deepset_latent_dim)
-    self.model_obstacle = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=self.vae_latent_dim)
+    # self.model_obstacle = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=self.swae_latent_dim)
+    self.model_obstacle = SWAE(**params["swae"])
     model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
     self.model_obstacle.load_state_dict(torch.load(model_load_path))
     self.model_obstacle.eval()
@@ -69,9 +71,9 @@ class Polkadot(nn.Module):
   
   # input = [g ∈ R^3, v ∈ R^3, depth ∈ R^hidden_dim, neighbor_0 ~ neighbor_n ∈ R^6]
   # def forward_pretrain(self, input):
-  #   input_neighbors = input[:, 6+self.vae_latent_dim:]
+  #   input_neighbors = input[:, 6+self.swae_latent_dim:]
   #   output_neighbors = self.model_neighbors(input_neighbors)
-  #   input_ppo = torch.cat([input[:, :6+self.vae_latent_dim], output_neighbors], dim=1)
+  #   input_ppo = torch.cat([input[:, :6+self.swae_latent_dim], output_neighbors], dim=1)
   #   output_ppo = self.action_model({"obs" : input_ppo}, None, None)
   #   return output_ppo
 
@@ -123,8 +125,8 @@ class Polkadot(nn.Module):
     return self.base.recurrent_hidden_state_size
   
   def forward(self, obs, rnn_hxs, masks):
-    deepset_output = self.model_neighbors(obs[:, 6+self.vae_latent_dim:])
-    inputs = torch.cat([obs[:, :6+self.vae_latent_dim], deepset_output], dim=1)
+    deepset_output = self.model_neighbors(obs[:, 6+self.swae_latent_dim:])
+    inputs = torch.cat([obs[:, :6+self.swae_latent_dim], deepset_output], dim=1)
     return self.base(inputs, rnn_hxs, masks)
 
   def get_value(self, obs, rnn_hxs, masks):
@@ -142,8 +144,8 @@ class Polkadot(nn.Module):
     return value, action_log_probs, dist_entropy, rnn_hxs
 
   def act(self, obs, rnn_hxs, masks, deterministic=False):
-    # deepset_output = self.model_neighbors(obs[:, 6+self.vae_latent_dim:])
-    # inputs = torch.cat([obs[:, :6+self.vae_latent_dim], deepset_output], dim=1)
+    # deepset_output = self.model_neighbors(obs[:, 6+self.swae_latent_dim:])
+    # inputs = torch.cat([obs[:, :6+self.swae_latent_dim], deepset_output], dim=1)
     # value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
     value, actor_features, rnn_hxs = self.forward(obs, rnn_hxs, masks)
     dist = self.dist(actor_features)

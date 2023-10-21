@@ -12,17 +12,23 @@ import glob
 import os
 import yaml
 from swarm.system.sim import SimulationManager
+from torchvision.transforms import ToPILImage
 
 class CustomDataset(Dataset):
-    def __init__(self, num_images, map_pcd):
+    def __init__(self, num_images, map_pcd, name):
         yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../swarm/config/params.yaml")
         with open(yaml_path, 'r') as f:
             params = yaml.load(f, Loader=yaml.SafeLoader)
         self.num_images = num_images
         self.images = []
-        self.transform = transforms.Compose(
-            [transforms.ToTensor(),
-             transforms.Normalize((0.5,), (0.5,))])
+        # self.transform = transforms.Compose(
+        #     [transforms.ToTensor(),
+        #      transforms.Normalize((0.5,), (0.5,))])
+        self.transform = transforms.Compose([ToPILImage(),
+                            transforms.RandomHorizontalFlip(),
+                            transforms.CenterCrop(148),
+                            transforms.Resize(params["vae"]["patch_size"]),
+                            transforms.ToTensor(),])
         self.camera_width = params["env"]["camera_width"]
         self.camera_height = params["env"]["camera_height"]
         self.downsampling_factor = 1
@@ -30,8 +36,9 @@ class CustomDataset(Dataset):
         self.map_lower_bound = [-13.0, -10.0, 0.0]
         self.map_upper_bound = [13.0, 10.0, 1.0]
         self.map_pcd = map_pcd
-        self.sim_manager = SimulationManager()
-        self.sim_manager.create_field(map_pcd, visible=False)
+        self.sim_manager = SimulationManager(params)
+        self.sim_manager.create_volume_field(map_pcd, visible=True)
+        self.name = name
 
     def save_image(self, path, data):
         # png形式で保存
@@ -44,7 +51,7 @@ class CustomDataset(Dataset):
         return image
         
     def generateImage(self, idx):
-        self.image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data/image_{}.png".format(idx))
+        self.image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data/box/{}_{}.png".format(self.name, idx))
         if os.path.exists(self.image_dir):
             if idx/self.num_images*100 % 10 == 0:
                 print("Load Image: {}%".format(int(idx/self.num_images*100)))
@@ -54,6 +61,7 @@ class CustomDataset(Dataset):
             if idx/self.num_images*100 % 10 == 0:
                 print("Generate Image: {}%".format(int(idx/self.num_images*100)))
             # image = self.get_local_observation(self.map_pcd)
+            print("not exist: {}".format(self.image_dir))
             
             image = self.sim_manager.get_local_observation(self.random_camera_pos(), self.random_camera_attitude(quat=True))
             self.save_image(self.image_dir, image)

@@ -7,6 +7,7 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from gym_pybullet_drones.envs.BaseAviary import BaseAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics
 from gym_pybullet_drones.envs.single_agent_rl.BaseDotAviary import ActionType, ObservationType
+from gym_pybullet_drones.envs.multi_agent_rl.PolkadotAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import nnlsRPM
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
@@ -389,8 +390,9 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
                 for j in range(self.NUM_DRONES):
                     if i != j:
                         neighbors.append(self._getDroneStateVector(j))
-                state, neighbors_state, depth = self._computeDroneObservation(self._getDroneStateVector(i),neighbors)
+                state, neighbors_state, depth = self._computeDroneObservation(self._getDroneStateVector(i),neighbors,i)
                 obs[i] = {"state": state,
+                          "full_state": self._getDroneStateVector(0),
                           "neighbors": neighbors_state,
                           "depth": depth,
                           }
@@ -400,7 +402,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
 
     ################################################################################
 
-    def _computeDroneObservation(self,state,neighbors_state):
+    def _computeDroneObservation(self,state,neighbors_state,drone_id):
         raise NotImplementedError
 
     ################################################################################

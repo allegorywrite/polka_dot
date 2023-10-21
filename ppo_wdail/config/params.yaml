@@ -1,4 +1,7 @@
 algo: "WDAIL"
+data:
+  file_batch_size: 1000000
+  preprocess_workers: 5
 env:
   name: "DotEnv" # 環境の名前
   num_drones: 10 # ドローンの数
@@ -9,7 +12,7 @@ env:
   drone_radius: 0.2
   frequency: 100 # シミュレーションの周波数
   max_vel: 3.0
-  map_name: "agents10_57097467"
+  map_name: "agents10_11842339"
   start_pos: [0.0, 0.0, 0.0]
   goal_pos: [0.0, 0.0, 0.0]
   state_dim: 6 # 状態の次元数
@@ -43,13 +46,21 @@ vae:
   batch_size: 100 # バッチサイズ
   image_size: [128, 128] # 画像サイズ
   hidden_dims: [32, 64, 128, 256, 512] # 隠れ層の次元数
-  latent_dim: 64 # 潜在変数の次元数
+  latent_dim: 20 # 潜在変数の次元数
   in_channels: 1 # 入力画像のチャンネル数(デプス画像は1)
   lr: 0.005 # 学習率
   scheduler_gamma: 0.95 # 学習率の減衰率
   weight_decay: 0.0 # 重み減衰
   kld_weight: 0.05 # KLダイバージェンスの重み
   manual_seed: 42 # 乱数シード
+  patch_size: 64
+swae:
+  in_channels: 1
+  latent_dim: 20
+  reg_weight: 100
+  wasserstein_deg: 2.0
+  num_projections: 200
+  projection_dist: "normal" #"cauchy"
 deepset:
   latent_dim: 16 # 潜在変数の次元数
 ppo:

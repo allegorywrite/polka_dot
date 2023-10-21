@@ -2,6 +2,7 @@ import glob
 import numpy as np
 import concurrent.futures
 from multiprocessing import Manager, cpu_count
+import torch.multiprocessing as multiprocessing
 # from torch import nn, tanh, relu
 import sys
 from pathlib import Path
@@ -19,7 +20,7 @@ import yaml
 from scipy.spatial.transform import Rotation
 from skimage.transform import resize
 from ppo_wdail.systems.sim import SimulationManager
-from VAE.models.vanilla_vae import VanillaVAE
+from VAE.models.swae import SWAE
 import torch
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -49,6 +50,7 @@ class DataGenerator:
 		self.downsampling_factor = 1
 		self.target_dim = params["vae"]["image_size"]
 		self.max_vel = params["env"]["max_vel"]
+		self.preprocess_workers = params["data"]["preprocess_workers"]
 
 		self.sencing_radius = params["env"]["sencing_radius"]
 		self.test_train_ratio = 0.8
@@ -57,18 +59,18 @@ class DataGenerator:
 
 		# self.test_array = manager.list()
 		self.file_size = 0
-		self.file_batch_size = 100
+		self.file_batch_size = params["data"]["file_batch_size"]
 		self.file_batch_num = 0
 		self.total_train_dataset_size = 0
 		self.total_test_dataset_size = 0
+		self.params = params
 
-		self.sim_manager = SimulationManager(params)
+		# self.sim_manager = SimulationManager(params)
 
 		self.encode_depth = encode_depth
 		if self.encode_depth:
-			self.vision_encoder = VanillaVAE(in_channels=params["vae"]["in_channels"], latent_dim=params["vae"]["latent_dim"])
+			self.vision_encoder = SWAE(**params['swae']).to(device)
 			model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')
-			self.vision_encoder.to(device)
 			self.vision_encoder.load_state_dict(torch.load(model_load_path, map_location=device))
 			self.vision_encoder.eval()
 	
@@ -136,10 +138,11 @@ class DataGenerator:
 		# print("state_seq_of_all_drones.shape = {}".format(replay_data.shape))
 		vision_file_path = "{}/../vision/{}.pcd".format(os.path.dirname(replay_file), basename_without_ext)
 		global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
-		self.sim_manager.create_field(global_map_world_pc)
+		self.sim_manager = SimulationManager(self.params)
+		self.sim_manager.create_volume_field(global_map_world_pc)
 		for t in range(0, replay_data.shape[0]-1):
-			# if t % 10 == 0:
-			# 	print("[dataset] file = ", basename_without_ext,  "t = {}".format(t))
+			if t % 10 == 0:
+				print("[dataset] file = ", basename_without_ext,  "t = {}".format(t))
 			if replay_data[t,0] == 0:
 				self.t_start = t + 1
 				continue
@@ -150,17 +153,14 @@ class DataGenerator:
 				# State, Observation, Actionの取得
 				p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next = self.sim_manager.getSOA_of_world(replay_data, map_data, t, agent_id)
 				# ベース座標系に変換
-				neighbor_state_local_array, v_i_local, goal_local, action = self.sim_manager.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, w_i_world, goal_i, p_next, q_next)
-				normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local = self.clip_and_normlize(neighbor_state_local_array, v_i_local, goal_local)
+				neighbor_state_local_array, v_i_local, goal_local = self.sim_manager.transform_to_local(replay_data, t, agent_id, p_i_world, q_i_world, v_i_world, goal_i)
+				normalized_neighbor_state_local_array, normalized_v_i_local, normalized_goal_local = self.sim_manager.clip_and_normlize(neighbor_state_local_array, v_i_local, goal_local)
 
 				depth_data = self.sim_manager.get_local_observation(p_i_world, q_i_world)
+				action = self.sim_manager.get_processed_action(p_i_world, q_i_world, w_i_world, p_next)
 				
 				if self.encode_depth:
-					self.vision_encoder.eval()
-					input_obs = torch.tensor(depth_data).unsqueeze(0).unsqueeze(0).to(self.device)
-					mu, log_var = self.encoder.encode(input_obs)
-					depth_data = self.encoder.reparameterize(mu, log_var)
-					depth_data = depth_data.squeeze(0).squeeze(0).detach().cpu().numpy()
+					depth_data = self.vision_encoder.embedding(depth_data, self.device)
 
 				data = [int(normalized_neighbor_state_local_array.shape[0]/2), normalized_goal_local, normalized_v_i_local, normalized_neighbor_state_local_array, depth_data, action]
 				dataset.append(data)
@@ -254,6 +254,7 @@ class DataGenerator:
 	
 	def process_file(self, file_info):
 		index, file = file_info
+		print("[dataset] Processing {}th file...".format(index))
 		dataset = self.generate_dataset(file)
 		len_case = len(dataset)
 		# print('files = {}, len_case = {}'.format(file, len_case))
@@ -278,7 +279,7 @@ class DataGenerator:
 			test_data = self.load_array(name="test", neighbors_num=neighbors_num, max_data_size=max_data_size)
 		return train_data, test_data
 		
-	def generate_data(self, visualize=False):
+	def generate_batch_data(self, visualize=False):
 		print("Loading Data...")
 		files = glob.glob(self.replay_dir)
 		print("Size of files: ", len(files))
@@ -290,13 +291,16 @@ class DataGenerator:
 		print("Generating Dataset...")
 
 		batch_itr = 0
+		# if multiprocessing.get_start_method() == 'fork':
+		# 	multiprocessing.set_start_method('spawn', force=True)
+		# 	print("{} setup done".format(multiprocessing.get_start_method()))
 		for i in range(0, len(files), self.file_batch_size):
 			print("Processing {}th batch...".format(batch_itr))
 			manager = Manager()
 			self.train_dataset = manager.list()
 			self.test_dataset = manager.list()
 			files_batch = files[i:i+self.file_batch_size]
-			with concurrent.futures.ProcessPoolExecutor(max_workers=int(cpu_count())) as executor:
+			with concurrent.futures.ProcessPoolExecutor(max_workers=self.preprocess_workers) as executor:
 				executor.map(self.process_file, enumerate(files_batch))
 			del manager
 			del executor
@@ -305,14 +309,45 @@ class DataGenerator:
 			self.total_train_dataset_size = len(self.train_dataset)
 			self.total_test_dataset_size = len(self.test_dataset)
 			batch_itr += 1
-			del self.train_dataset
-			del self.test_dataset
 
 			dataset_dict_train = self.generate_dict(self.train_dataset, id=batch_itr, name="train", shuffle=True)
 			dataset_dict_test = self.generate_dict(self.test_dataset, id=batch_itr, name="test", shuffle=True)
+			del self.train_dataset
+			del self.test_dataset
 			del dataset_dict_train
 			del dataset_dict_test
 		self.file_batch_num = batch_itr
+
+	def generate_data(self, visualize=False):
+		print("Loading Data...")
+		files = glob.glob(self.replay_dir)
+		print("Size of files: ", len(files))
+		self.file_size = len(files)
+		if visualize:
+			print("Visualizing Data...")
+			self.generate_dataset(files[0], True)
+
+		print("Generating Dataset...")
+
+		if multiprocessing.get_start_method() == 'fork':
+			multiprocessing.set_start_method('spawn', force=True)
+			print("{} setup done".format(multiprocessing.get_start_method()))
+
+		manager = Manager()
+		self.train_dataset = manager.list()
+		self.test_dataset = manager.list()
+		with concurrent.futures.ProcessPoolExecutor(max_workers=self.preprocess_workers) as executor:
+			executor.map(self.process_file, enumerate(files))
+		# for idx, file in enumerate(files):
+		# 	self.process_file((idx, file))
+
+		print('Training Dataset Size: ',len(self.train_dataset))
+		print('Total Test Dataset Size: ',len(self.test_dataset))
+		self.total_train_dataset_size = len(self.train_dataset)
+		self.total_test_dataset_size = len(self.test_dataset)
+
+		dataset_dict_train = self.generate_dict(self.train_dataset, id=0, name="train", shuffle=True)
+		dataset_dict_test = self.generate_dict(self.test_dataset, id=0, name="test", shuffle=True)
 
 	def __len__(self):
 		return self.total_train_dataset_size, self.total_test_dataset_size, self.file_batch_num
