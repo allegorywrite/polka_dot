@@ -29,6 +29,7 @@ from ray.rllib.agents import ppo
 
 from gym_pybullet_drones.utils.Logger import Logger
 from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
+from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import sync, str2bool
 
 DEFAULT_RLLIB = False
@@ -40,13 +41,17 @@ DEFAULT_COLAB = False
 def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO):
 
     #### Check the environment's spaces ########################
-    env = gym.make("hover-aviary-v0")
+    # env = gym.make("hover-aviary-v0")
+    env = HoverAviary(gui=gui,
+                      act=ActionType.VEL,
+                        record=record_video
+                        )
     print("[INFO] Action space:", env.action_space)
     print("[INFO] Observation space:", env.observation_space)
-    check_env(env,
-              warn=True,
-              skip_render_check=True
-              )
+    # check_env(env,
+    #           warn=True,
+    #           skip_render_check=True
+    #           )
 
     #### Train the model #######################################
     if not rllib:
@@ -54,7 +59,9 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
                     env,
                     verbose=1
                     )
-        model.learn(total_timesteps=10000) # Typically not enough
+        # model = A2C.load("a2c_hover", env=env)
+        model.learn(total_timesteps=1000000) # Typically not enough
+        # model.save("a2c_hover")
     else:
         ray.shutdown()
         ray.init(ignore_reinit_error=True)
@@ -64,7 +71,7 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
         config["framework"] = "torch"
         config["env"] = "hover-aviary-v0"
         agent = ppo.PPOTrainer(config)
-        for i in range(3): # Typically not enough
+        for i in range(100): # Typically not enough
             results = agent.train()
             print("[INFO] {:d}: episode_reward max {:f} min {:f} mean {:f}".format(i,
                                                                                    results["episode_reward_max"],
@@ -76,9 +83,9 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
         ray.shutdown()
 
     #### Show (and record a video of) the model's performance ##
-    env = HoverAviary(gui=gui,
-                        record=record_video
-                        )
+    # env = HoverAviary(gui=gui,
+    #                     record=record_video
+    #                     )
     logger = Logger(logging_freq_hz=int(env.SIM_FREQ/env.AGGR_PHY_STEPS),
                     num_drones=1,
                     output_folder=output_folder,

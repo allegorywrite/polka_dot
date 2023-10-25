@@ -72,7 +72,9 @@ class HoverAviary(BaseSingleAgentAviary):
 
         """
         state = self._getDroneStateVector(0)
-        return -1 * np.linalg.norm(np.array([0, 0, 1])-state[0:3])**2
+        hover_reward = -1 * np.linalg.norm(np.array([0, 0, 1])-state[0:3])**2
+        attitude_reward = -1 * np.linalg.norm(state[7:9])**2
+        return hover_reward
 
     ################################################################################
     
@@ -82,7 +84,7 @@ class HoverAviary(BaseSingleAgentAviary):
         Returns
         -------
         bool
-            Whether the current episode is done.
+            Whether the current episode is done.ui=gui
 
         """
         if self.step_counter/self.SIM_FREQ > self.EPISODE_LEN_SEC:

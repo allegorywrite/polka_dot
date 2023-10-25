@@ -151,7 +151,8 @@ class BaseAviary(gym.Env):
             self.B_COEFF = np.array([1/self.KF, 1/(self.KF*self.L), 1/(self.KF*self.L), 1/self.KM])
         #### Connect to PyBullet ###################################
         if self.GUI:
-            #### With debug GUI ########################################
+            ### With debug GUI ########################################
+            print("[INFO] BaseAviary.__init__() ——— Starting GUI-less PyBullet simulation, GUI will be launched in the next step ...")
             self.CLIENT = p.connect(p.GUI) # p.connect(p.GUI, options="--opengl2")
             for i in [p.COV_ENABLE_RGB_BUFFER_PREVIEW, p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW]:
                 p.configureDebugVisualizer(i, 0, physicsClientId=self.CLIENT)
