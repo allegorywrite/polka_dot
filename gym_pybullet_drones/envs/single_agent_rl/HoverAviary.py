@@ -72,7 +72,9 @@ class HoverAviary(BaseSingleAgentAviary):
 
         """
         state = self._getDroneStateVector(0)
-        hover_reward = -1 * np.linalg.norm(np.array([0, 0, 1])-state[0:3])**2
+        hover_reward = -1 * np.linalg.norm(np.array([0, 0, 2])-state[0:3])**2
+        # print("state: ", state[0:3])
+        # print("reward: ", hover_reward)
         attitude_reward = -1 * np.linalg.norm(state[7:9])**2
         return hover_reward
 
