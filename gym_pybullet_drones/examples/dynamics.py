@@ -29,6 +29,7 @@ from ray.rllib.agents import ppo
 
 from gym_pybullet_drones.utils.Logger import Logger
 from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
+from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
 from gym_pybullet_drones.utils.utils import sync, str2bool
 
 DEFAULT_RLLIB = False
@@ -42,6 +43,8 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
     #### Check the environment's spaces ########################
     # env = gym.make("hover-aviary-v0")
     env = HoverAviary(gui=gui,
+                    act=ActionType.DYN,
+                    initial_xyzs=np.array([[0, 0, 1]]),
                     record=record_video
                     )
     print("[INFO] Action space:", env.action_space)
@@ -57,7 +60,7 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
                     env,
                     verbose=1
                     )
-        model.learn(total_timesteps=10000) # Typically not enough
+        model.learn(total_timesteps=100000) # Typically not enough
     else:
         ray.shutdown()
         ray.init(ignore_reinit_error=True)
@@ -80,8 +83,10 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
 
     #### Show (and record a video of) the model's performance ##
     env = HoverAviary(gui=gui,
-                        record=record_video
-                        )
+                    act=ActionType.DYN,
+                    initial_xyzs=np.array([[0, 0, 1]]),
+                    record=record_video
+                    )
     logger = Logger(logging_freq_hz=int(env.SIM_FREQ/env.AGGR_PHY_STEPS),
                     num_drones=1,
                     output_folder=output_folder,
