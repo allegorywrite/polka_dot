@@ -55,6 +55,35 @@ def str2bool(val):
 
 ################################################################################
 
+def computeDiffOutput(rpm, a, b_coeff_inv, gravity, max_xy_torque, max_z_torque):
+    """Computes the difference between desired and actual thrust and torques.
+
+    Parameters
+    ----------
+    rpm : ndarray
+        (4,)-shaped array of ints containing the current RPMs of each propeller.
+    a : ndarray
+        (4, 4)-shaped array of floats containing the motors configuration.
+    b_coeff_inv : ndarray
+        (4,1)-shaped array of floats containing the coefficients to re-scale thrust and torques. 
+
+    Returns
+    -------
+    tuple
+        (thrust, x_torque, y_torque, z_torque) differential flat output.
+
+    """
+    B = np.dot(a, np.square(rpm))
+    B = np.multiply(B, b_coeff_inv)
+
+    action = np.zeros(4)
+    action[0] = B[0]/gravity - 1
+    action[1] = B[1]/max_xy_torque/0.05
+    action[2] = B[2]/max_xy_torque/0.05
+    action[3] = B[3]/max_z_torque/0.05
+
+    return B, action
+
 def nnlsRPM(thrust,
             x_torque,
             y_torque,

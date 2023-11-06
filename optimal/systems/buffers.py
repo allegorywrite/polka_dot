@@ -7,7 +7,7 @@ import torch as th
 from gymnasium import spaces
 
 from stable_baselines3.common.preprocessing import get_action_dim, get_obs_shape
-from optim.systems.type_aliases import (
+from optimal.systems.type_aliases import (
     DictReplayBufferSamples,
     DictRolloutBufferSamples,
     ReplayBufferSamples,
@@ -47,9 +47,10 @@ class BaseBuffer(ABC):
         self.buffer_size = buffer_size
         self.observation_space = observation_space
         self.action_space = action_space
-        self.obs_shape = get_obs_shape(observation_space)
 
-        self.action_dim = get_action_dim(action_space)
+        self.obs_shape = observation_space.shape
+
+        self.action_dim = int(np.prod(action_space.shape))
         self.pos = 0
         self.full = False
         self.device = get_device(device)
@@ -350,6 +351,7 @@ class DataStorage(BaseBuffer):
         gae_lambda: float = 1,
         gamma: float = 0.99,
         n_envs: int = 1,
+        eval_rate: float = 0.2,
     ):
         buffer_size = total_step + buffer_size
         super().__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
@@ -357,6 +359,8 @@ class DataStorage(BaseBuffer):
         self.gae_lambda = gae_lambda
         self.gamma = gamma
         self.generator_ready = False
+        self.indices = np.random.permutation(self.buffer_size * self.n_envs)
+        self.eval_rate = eval_rate
         self.reset()
 
     def reset(self) -> None:
@@ -378,9 +382,9 @@ class DataStorage(BaseBuffer):
         new_obs: np.ndarray,
         action: np.ndarray,
         reward: np.ndarray,
-        episode_start: np.ndarray,
-        value: th.Tensor,
-        log_prob: th.Tensor,
+        # episode_start: np.ndarray,
+        # value: th.Tensor,
+        # log_prob: th.Tensor,
     ) -> None:
         """
         :param obs: Observation
@@ -392,9 +396,9 @@ class DataStorage(BaseBuffer):
         :param log_prob: log probability of the action
             following the current policy.
         """
-        if len(log_prob.shape) == 0:
-            # Reshape 0-d tensor to avoid error
-            log_prob = log_prob.reshape(-1, 1)
+        # if len(log_prob.shape) == 0:
+        #     # Reshape 0-d tensor to avoid error
+        #     log_prob = log_prob.reshape(-1, 1)
 
         # Reshape needed when using multiple envs with discrete observations
         # as numpy cannot broadcast (n_discrete,) to (n_discrete, 1)
@@ -408,16 +412,16 @@ class DataStorage(BaseBuffer):
         self.new_observations[self.pos] = np.array(new_obs).copy()
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
-        self.episode_starts[self.pos] = np.array(episode_start).copy()
-        self.values[self.pos] = value.clone().cpu().numpy().flatten()
-        self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
+        # self.episode_starts[self.pos] = np.array(episode_start).copy()
+        # self.values[self.pos] = value.clone().cpu().numpy().flatten()
+        # self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
         self.pos += 1
         if self.pos == self.buffer_size:
             self.full = True
 
     def get(self, batch_size: Optional[int] = None) -> Generator[RolloutBufferSamples, None, None]:
         # assert self.full, ""
-        indices = np.random.permutation(self.buffer_size * self.n_envs)
+        
         # Prepare the data
         if not self.generator_ready:
             _tensor_names = [
@@ -438,9 +442,38 @@ class DataStorage(BaseBuffer):
         if batch_size is None:
             batch_size = self.buffer_size * self.n_envs
 
-        start_idx = 0
+        start_idx = int(self.buffer_size * self.n_envs * self.eval_rate)
         while start_idx < self.buffer_size * self.n_envs:
-            yield self._get_samples(indices[start_idx : start_idx + batch_size])
+            yield self._get_samples(self.indices[start_idx : start_idx + batch_size])
+            start_idx += batch_size
+
+    def get_eval(self, batch_size: Optional[int] = None) -> Generator[RolloutBufferSamples, None, None]:
+        # assert self.full, ""
+        
+        # Prepare the data
+        if not self.generator_ready:
+            _tensor_names = [
+                "observations",
+                "new_observations",
+                "actions",
+                "values",
+                "log_probs",
+                "advantages",
+                "returns",
+            ]
+
+            for tensor in _tensor_names:
+                self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
+            self.generator_ready = True
+
+        # Return everything, don't create minibatches
+        if batch_size is None:
+            batch_size = self.buffer_size * self.n_envs
+        start_idx = 0
+        while start_idx < int(self.buffer_size * self.n_envs * self.eval_rate):
+            if start_idx + batch_size > int(self.buffer_size * self.n_envs * self.eval_rate):
+                batch_size = int(self.buffer_size * self.n_envs * self.eval_rate) - start_idx
+            yield self._get_samples(self.indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
 
     def _get_samples(

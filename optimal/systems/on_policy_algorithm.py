@@ -7,7 +7,7 @@ import torch as th
 from gymnasium import spaces
 
 from stable_baselines3.common.base_class import BaseAlgorithm
-from optim.systems.buffers import DictRolloutBuffer, RolloutBuffer, DataStorage
+from optimal.systems.buffers import DictRolloutBuffer, RolloutBuffer, DataStorage
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
@@ -196,6 +196,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             # Handle timeout by bootstraping with value function
             # see GitHub issue #633
+            diff_outputs = np.zeros((env.num_envs, 4))
             for idx, done in enumerate(dones):
                 if (
                     done
@@ -206,6 +207,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     with th.no_grad():
                         terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value
+                diff_outputs[idx] = infos[idx]["diff_output"]
 
             # rollout_buffer.add(
             #     self._last_obs,  # type: ignore[arg-type]
@@ -218,7 +220,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             data_storage.add(
                 self._last_obs,  # type: ignore[arg-type]
                 new_obs,
-                clipped_actions,
+                diff_outputs,
                 rewards,
                 self._last_episode_starts,  # type: ignore[arg-type]
                 values,
@@ -227,7 +229,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             rollout_buffer.add(
                 self._last_obs,
                 new_obs,
-                clipped_actions,
+                actions,
                 rewards,
                 self._last_episode_starts,  # type: ignore[arg-type]
                 values,
@@ -264,6 +266,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         dynamics_model=None,
     ) -> SelfOnPolicyAlgorithm:
         iteration = 0
+
+        print("obs: ", self.observation_space)
+        print("action:", self.action_space)
 
         self.data_storage = DataStorage(
             total_timesteps,

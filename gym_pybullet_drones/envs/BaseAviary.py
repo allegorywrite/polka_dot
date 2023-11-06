@@ -13,6 +13,7 @@ import pybullet as p
 import pybullet_data
 import gym
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ImageType
+from gym_pybullet_drones.utils.utils import nnlsRPM, computeDiffOutput
 
 
 
@@ -149,6 +150,7 @@ class BaseAviary(gym.Env):
                 self.A = np.array([ [1, 1, 1, 1], [0, 1, 0, -1], [-1, 0, 1, 0], [-1, 1, -1, 1] ])
             self.INV_A = np.linalg.inv(self.A)
             self.B_COEFF = np.array([1/self.KF, 1/(self.KF*self.L), 1/(self.KF*self.L), 1/self.KM])
+            self.B_COEFF_INV = np.array([self.KF, self.KF*self.L, self.KF*self.L, self.KM])
         #### Connect to PyBullet ###################################
         if self.GUI:
             #### With debug GUI ########################################
@@ -314,7 +316,16 @@ class BaseAviary(gym.Env):
         #### Save, preprocess, and clip the action to the max. RPM #
         else:
             self._saveLastAction(action)
-            clipped_action = np.reshape(self._preprocessAction(action), (self.NUM_DRONES, 4))
+            rpm = self._preprocessAction(action)
+            dif_output, recon_action = computeDiffOutput(
+                            rpm=rpm,
+                            a=self.A,
+                            b_coeff_inv=self.B_COEFF_INV,
+                            gravity=self.GRAVITY,
+                            max_xy_torque=self.MAX_XY_TORQUE,
+                            max_z_torque=self.MAX_Z_TORQUE,
+                            )
+            clipped_action = np.reshape(rpm, (self.NUM_DRONES, 4))
         #### Repeat for as many as the aggregate physics steps #####
         for _ in range(self.AGGR_PHY_STEPS):
             #### Update and store the drones kinematic info for certain
@@ -355,7 +366,7 @@ class BaseAviary(gym.Env):
         info = self._computeInfo()
         #### Advance the step counter ##############################
         self.step_counter = self.step_counter + (1 * self.AGGR_PHY_STEPS)
-        obs, reward, done, info = self._afterStep(obs, reward, done, info)
+        obs, reward, done, info = self._afterStep(obs, reward, done, info, dif_output)
         return obs, reward, done, info
     
     ################################################################################

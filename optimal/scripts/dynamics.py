@@ -20,7 +20,7 @@ import time
 import argparse
 import gym
 import numpy as np
-from optim.systems.a2c import A2C
+from optimal.systems.a2c import A2C
 from stable_baselines3.a2c import MlpPolicy
 from stable_baselines3.common.env_checker import check_env
 import ray
@@ -33,26 +33,41 @@ from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
 from gym_pybullet_drones.utils.utils import sync, str2bool
 
-from optim.models.gitai import GITAI
+from optimal.models.gitai import GITAI
 
 DEFAULT_RLLIB = False
 DEFAULT_GUI = True
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
+DEFAULT_SIMULATION_FREQ_HZ = 240
+DEFAULT_CONTROL_FREQ_HZ = 240
 
-def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO):
+def run(
+        rllib=DEFAULT_RLLIB,
+        output_folder=DEFAULT_OUTPUT_FOLDER, 
+        gui=DEFAULT_GUI, 
+        plot=True, 
+        colab=DEFAULT_COLAB, 
+        record_video=DEFAULT_RECORD_VIDEO,
+        simulation_freq_hz=DEFAULT_SIMULATION_FREQ_HZ,
+        control_freq_hz=DEFAULT_CONTROL_FREQ_HZ,
+    ):
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
 
+    AGGR_PHY_STEPS = int(simulation_freq_hz/control_freq_hz)
+
     #### Check the environment's spaces ########################
     env = HoverAviary(gui=gui,
-                    act=ActionType.DYN,
+                    act=ActionType.VEL,
                     initial_xyzs=np.array([[0, 0, 1]]),
-                    record=record_video
+                    record=record_video,
+                    freq=simulation_freq_hz,
+                    aggregate_phy_steps=AGGR_PHY_STEPS,
                     )
     print("[INFO] Action space:", env.action_space.shape)
     print("[INFO] Observation space:", env.observation_space.shape)
@@ -61,23 +76,24 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
 
     dynamics_model = GITAI(
         output_shape=env.observation_space.shape[0],
-        input_shape=env.observation_space.shape[0]+env.action_space.shape[0],
+        input_shape=env.observation_space.shape[0]-3+env.action_space.shape[0],
         device=device, 
         batch_size=batch_size)
 
     system_model = A2C(MlpPolicy,
         env,
         verbose=1,
-        n_steps=batch_size,
-        device=device,
+        # n_steps=batch_size,
+        # device=device,        print("action:", action)
         )
     
     print("Collecting data")
     # data_storage = system_model.learn(total_timesteps=100000, dynamics_model=dynamics_model)
-    data_storage = system_model.learn(total_timesteps=10000000) # Typically not enough
+    # system_model = A2C.load("controller", env=env)
+    data_storage = system_model.learn(total_timesteps=1000000) # Typically not enough
     system_model.save("controller")
     print("Training dynamics model")
-    dynamics_model.train(data_storage, epochs=100)
+    dynamics_model.train(data_storage, epochs=200)
 
     # logger = Logger(logging_freq_hz=int(env.SIM_FREQ/env.AGGR_PHY_STEPS),
     #                 num_drones=1,

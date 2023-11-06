@@ -6,7 +6,7 @@ import pybullet as p
 
 from gym_pybullet_drones.envs.BaseAviary import BaseAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ImageType
-from gym_pybullet_drones.utils.utils import nnlsRPM
+from gym_pybullet_drones.utils.utils import nnlsRPM, computeDiffOutput
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
 
@@ -85,7 +85,8 @@ class BaseSingleAgentAviary(BaseAviary):
 
         """
         vision_attributes = True if obs == ObservationType.RGB else False
-        dynamics_attributes = True if act in [ActionType.DYN, ActionType.ONE_D_DYN] else False
+        # dynamics_attributes = True if act in [ActionType.DYN, ActionType.ONE_D_DYN] else False
+        dynamics_attributes = True
         self.OBS_TYPE = obs
         self.ACT_TYPE = act
         self.EPISODE_LEN_SEC = 5
@@ -219,6 +220,7 @@ class BaseSingleAgentAviary(BaseAviary):
             commanded to the 4 motors of each drone.
 
         """
+        # print("action:", action)
         if self.ACT_TYPE == ActionType.TUN:
             self.ctrl.setPIDCoefficients(p_coeff_pos=(action[0]+1)*self.TUNED_P_POS,
                                          i_coeff_pos=(action[1]+1)*self.TUNED_I_POS,
@@ -231,10 +233,14 @@ class BaseSingleAgentAviary(BaseAviary):
         elif self.ACT_TYPE == ActionType.RPM:
             return np.array(self.HOVER_RPM * (1+0.05*action))
         elif self.ACT_TYPE == ActionType.DYN:
-            return nnlsRPM(thrust=(self.GRAVITY*(action[0]+1)),
-                           x_torque=(0.05*self.MAX_XY_TORQUE*action[1]),
-                           y_torque=(0.05*self.MAX_XY_TORQUE*action[2]),
-                           z_torque=(0.05*self.MAX_Z_TORQUE*action[3]),
+            thrust = self.GRAVITY*(action[0]+1)
+            x_torque = 0.05*self.MAX_XY_TORQUE*action[1]
+            y_torque = 0.05*self.MAX_XY_TORQUE*action[2]
+            z_torque = 0.05*self.MAX_Z_TORQUE*action[3]
+            rpm = nnlsRPM(thrust=thrust,
+                           x_torque=x_torque,
+                           y_torque=y_torque,
+                           z_torque=z_torque,
                            counter=self.step_counter,
                            max_thrust=self.MAX_THRUST,
                            max_xy_torque=self.MAX_XY_TORQUE,
@@ -244,6 +250,15 @@ class BaseSingleAgentAviary(BaseAviary):
                            b_coeff=self.B_COEFF,
                            gui=self.GUI
                            )
+            # dif_output, recon_action = computeDiffOutput(
+            #                 rpm=rpm,
+            #                 a=self.A,
+            #                 b_coeff_inv=self.B_COEFF_INV,
+            #                 gravity=self.GRAVITY,
+            #                 max_xy_torque=self.MAX_XY_TORQUE,
+            #                 max_z_torque=self.MAX_Z_TORQUE,
+            #                 )
+            return rpm
         elif self.ACT_TYPE == ActionType.PID: 
             state = self._getDroneStateVector(0)
             rpm, _, _ = self.ctrl.computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
