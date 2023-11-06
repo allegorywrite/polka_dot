@@ -6,7 +6,8 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
 from gym_pybullet_drones.envs.BaseAviary import BaseAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics
-from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
+from gym_pybullet_drones.envs.single_agent_rl.BaseDotAviary import ActionType, ObservationType
+from gym_pybullet_drones.envs.multi_agent_rl.PolkadotAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import nnlsRPM
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
@@ -77,7 +78,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
         self.ACT_TYPE = act
         self.EPISODE_LEN_SEC = 5
         #### Create integrated controllers #########################
-        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID]:
+        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL5D]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
             if drone_model in [DroneModel.CF2X, DroneModel.CF2P]:
                 self.ctrl = [DSLPIDControl(drone_model=DroneModel.CF2X) for i in range(num_drones)]
@@ -101,7 +102,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
                          dynamics_attributes=dynamics_attributes
                          )
         #### Set a limit on the maximum target speed ###############
-        if act == ActionType.VEL:
+        if act == ActionType.VEL or act == ActionType.VEL5D:
             self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
 
     ################################################################################
@@ -195,6 +196,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
 
         """
         rpm = np.zeros((self.NUM_DRONES,4))
+        # print("[BasePolkadotAviary._preprocessAction()] action:", action)
         for k, v in action.items():
             if self.ACT_TYPE == ActionType.RPM: 
                 rpm[int(k),:] = np.array(self.HOVER_RPM * (1+0.05*v))
@@ -388,8 +390,9 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
                 for j in range(self.NUM_DRONES):
                     if i != j:
                         neighbors.append(self._getDroneStateVector(j))
-                state, neighbors_state, depth = self._computeDroneObservation(self._getDroneStateVector(i),neighbors)
+                state, neighbors_state, depth = self._computeDroneObservation(self._getDroneStateVector(i),neighbors,i)
                 obs[i] = {"state": state,
+                          "full_state": self._getDroneStateVector(0),
                           "neighbors": neighbors_state,
                           "depth": depth,
                           }
@@ -399,7 +402,7 @@ class BasePolkadotAviary(BaseAviary, MultiAgentEnv):
 
     ################################################################################
 
-    def _computeDroneObservation(self,state,neighbors_state):
+    def _computeDroneObservation(self,state,neighbors_state,drone_id):
         raise NotImplementedError
 
     ################################################################################

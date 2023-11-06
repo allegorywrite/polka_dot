@@ -12,3 +12,16 @@ results/
 tmp/
 
 polkadot.egg-info/
+
+swarm/cache/
+ppo_wdail/cache/
+ppo_wdail/scripts/runs/
+
+__pycache__/
+gym_pybullet_drones/__pycache__/
+swarm/__pycache__/
+VAE/__pycache__/
+VAE/.vscode/
+.vscode/
+
+swarm/gym_pybullet_drones/**

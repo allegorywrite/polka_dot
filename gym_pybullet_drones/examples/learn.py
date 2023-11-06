@@ -31,56 +31,50 @@ from gym_pybullet_drones.utils.Logger import Logger
 from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import sync, str2bool
+from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
 
-DEFAULT_RLLIB = False
 DEFAULT_GUI = True
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
+DEFAULT_SIMULATION_FREQ_HZ = 240
+DEFAULT_CONTROL_FREQ_HZ = 60
 
-def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO):
+def run(
+        output_folder=DEFAULT_OUTPUT_FOLDER, 
+        gui=DEFAULT_GUI, plot=True, 
+        colab=DEFAULT_COLAB, 
+        record_video=DEFAULT_RECORD_VIDEO,
+        simulation_freq_hz=DEFAULT_SIMULATION_FREQ_HZ,
+        control_freq_hz=DEFAULT_CONTROL_FREQ_HZ,
+    ):
+
+    AGGR_PHY_STEPS = int(simulation_freq_hz/control_freq_hz)
 
     #### Check the environment's spaces ########################
     # env = gym.make("hover-aviary-v0")
+    # env = HoverAviary(gui=gui,
+    #                 record=record_video,
+    #                 act=ActionType.DYN,
+    #                 )
     env = HoverAviary(gui=gui,
-                      act=ActionType.VEL,
-                        record=record_video
-                        )
+                    act=ActionType.VEL,
+                    initial_xyzs=np.array([[0, 0, 0.5]]),
+                    record=record_video,
+                    freq=simulation_freq_hz,
+                    aggregate_phy_steps=AGGR_PHY_STEPS,
+                    )
     print("[INFO] Action space:", env.action_space)
     print("[INFO] Observation space:", env.observation_space)
-    # check_env(env,
-    #           warn=True,
-    #           skip_render_check=True
-    #           )
 
     #### Train the model #######################################
-    if not rllib:
-        model = A2C(MlpPolicy,
-                    env,
-                    verbose=1
-                    )
-        # model = A2C.load("a2c_hover", env=env)
-        model.learn(total_timesteps=1000000) # Typically not enough
-        # model.save("a2c_hover")
-    else:
-        ray.shutdown()
-        ray.init(ignore_reinit_error=True)
-        register_env("hover-aviary-v0", lambda _: HoverAviary())
-        config = ppo.DEFAULT_CONFIG.copy()
-        config["num_workers"] = 2
-        config["framework"] = "torch"
-        config["env"] = "hover-aviary-v0"
-        agent = ppo.PPOTrainer(config)
-        for i in range(100): # Typically not enough
-            results = agent.train()
-            print("[INFO] {:d}: episode_reward max {:f} min {:f} mean {:f}".format(i,
-                                                                                   results["episode_reward_max"],
-                                                                                   results["episode_reward_min"],
-                                                                                   results["episode_reward_mean"]
-                                                                                   )
-                  )
-        policy = agent.get_policy()
-        ray.shutdown()
+    # model = A2C(MlpPolicy,
+    #             env,
+    #             verbose=1
+    #             )
+    # model.learn(total_timesteps=500000)
+    # model.save("a2c_hover")
+    model = A2C.load("a2c_hover", env=env)
 
     #### Show (and record a video of) the model's performance ##
     # env = HoverAviary(gui=gui,
@@ -94,12 +88,9 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
     obs = env.reset()
     start = time.time()
     for i in range(10*env.SIM_FREQ):
-        if not rllib:
-            action, _states = model.predict(obs,
-                                            deterministic=True
-                                            )
-        else:
-            action, _states, _dict = policy.compute_single_action(obs)
+        action, _states = model.predict(obs,
+                                        deterministic=True
+                                        )
         obs, reward, done, info = env.step(action)
         logger.log(drone=0,
                    timestamp=i/env.SIM_FREQ,
@@ -120,7 +111,7 @@ def run(rllib=DEFAULT_RLLIB,output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI
 if __name__ == "__main__":
     #### Define and parse (optional) arguments for the script ##
     parser = argparse.ArgumentParser(description='Single agent reinforcement learning example script using hoverAviary')
-    parser.add_argument('--rllib',      default=DEFAULT_RLLIB,        type=str2bool,       help='Whether to use RLlib PPO in place of stable-baselines A2C (default: False)', metavar='')
+    # parser.add_argument('--rllib',      default=DEFAULT_RLLIB,        type=str2bool,       help='Whether to use RLlib PPO in place of stable-baselines A2C (default: False)', metavar='')
     parser.add_argument('--gui',                default=DEFAULT_GUI,       type=str2bool,      help='Whether to use PyBullet GUI (default: True)', metavar='')
     parser.add_argument('--record_video',       default=DEFAULT_RECORD_VIDEO,      type=str2bool,      help='Whether to record a video (default: False)', metavar='')
     parser.add_argument('--output_folder',     default=DEFAULT_OUTPUT_FOLDER, type=str,           help='Folder where to save logs (default: "results")', metavar='')

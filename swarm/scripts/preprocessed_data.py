@@ -21,10 +21,10 @@ if __name__ == '__main__':
   loader = []
 
   # データセットの読み込み
-  dataset = CustomDataset(False)
+  dataset = CustomDataset()
   # train_dataset_dict, test_dataset_dictは
   # array of [neighbor_num ∈ N, g ∈ R^3, v ∈ R^3, neighbor_0 ~ neighbor_n ∈ R^6, depth(128×128), action ∈ R^3] の辞書データ
-  train_dataset_dict, test_dataset_dict = dataset.load_data(args.use_preprocessed_data)
+  train_dataset_dict, test_dataset_dict = dataset.load_data(load=args.use_preprocessed_data, save=True, visualize=False)
   # エンコーダーの読み込み
   model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim)
   model_load_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../VAE/output/model.pth')

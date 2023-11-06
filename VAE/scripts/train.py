@@ -1,6 +1,7 @@
 from VAE.models.dataset import CustomDataset
 # from models.vae import Encoder, Decoder, Model
 from VAE.models.vanilla_vae import VanillaVAE
+from VAE.models.swae import SWAE
 from torchvision import transforms
 import torch
 import open3d as o3d
@@ -27,9 +28,9 @@ if __name__ == '__main__':
     # yamlファイルの読み込み
     yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../swarm/config/params.yaml")
     with open(yaml_path, 'r') as f:
-        params = yaml.load(f)
+        params = yaml.load(f, yaml.SafeLoader)
 
-    image_num_train = 110000
+    image_num_train = 150000
     image_num_test = 100
     epochs = 30 # エポック数
 
@@ -47,11 +48,11 @@ if __name__ == '__main__':
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/output.png")
 
-    vision_file_path = "map/map.pcd"
+    vision_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../map/map.pcd")
     global_map_world_pc = o3d.io.read_point_cloud(vision_file_path)
 
-    train_dataset = CustomDataset(num_images=image_num_train, map_pcd=global_map_world_pc)
-    test_dataset = CustomDataset(num_images=image_num_test, map_pcd=global_map_world_pc)
+    train_dataset = CustomDataset(num_images=image_num_train, map_pcd=global_map_world_pc, name="train")
+    test_dataset = CustomDataset(num_images=image_num_test, map_pcd=global_map_world_pc, name="test")
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     # depth_data = train_dataset.get_local_observation(global_map_world_pc)
@@ -59,7 +60,8 @@ if __name__ == '__main__':
     # plt.show()
     model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/model.pth")
 
-    model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim).to(device)
+    # model = VanillaVAE(in_channels = in_channels, latent_dim=latent_dim).to(device)
+    model = SWAE(**params['swae']).to(device)
 
     if args.load:
         model.load_state_dict(torch.load(model_save_path))
@@ -86,9 +88,7 @@ if __name__ == '__main__':
                 optimizer.step()
                 overall_loss += train_loss.item()
             scheduler.step()
-
-            average_loss_array.append(overall_loss / (batch_idx*batch_size))
-
+            average_loss_array.append(overall_loss / ((batch_idx+1)*batch_size))
             print("\tEpoch", epoch + 1, "complete!", "\tData Size: ", batch_idx*batch_size, "\tAverage Loss: ", overall_loss / (batch_idx*batch_size))
         print("Finish!!")
 
@@ -154,3 +154,5 @@ if __name__ == '__main__':
     plt.tight_layout()
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../output/reconstructed_images.png")
     plt.savefig(output_dir)  # Save the figure before showing it
+    print("Finish!!")
+    # plt.show()

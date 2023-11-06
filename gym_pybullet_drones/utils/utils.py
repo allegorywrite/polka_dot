@@ -55,6 +55,35 @@ def str2bool(val):
 
 ################################################################################
 
+def computeDiffOutput(rpm, a, b_coeff_inv, gravity, max_xy_torque, max_z_torque):
+    """Computes the difference between desired and actual thrust and torques.
+
+    Parameters
+    ----------
+    rpm : ndarray
+        (4,)-shaped array of ints containing the current RPMs of each propeller.
+    a : ndarray
+        (4, 4)-shaped array of floats containing the motors configuration.
+    b_coeff_inv : ndarray
+        (4,1)-shaped array of floats containing the coefficients to re-scale thrust and torques. 
+
+    Returns
+    -------
+    tuple
+        (thrust, x_torque, y_torque, z_torque) differential flat output.
+
+    """
+    B = np.dot(a, np.square(rpm))
+    B = np.multiply(B, b_coeff_inv)
+
+    action = np.zeros(4)
+    action[0] = B[0]/gravity - 1
+    action[1] = B[1]/max_xy_torque/0.05
+    action[2] = B[2]/max_xy_torque/0.05
+    action[3] = B[3]/max_z_torque/0.05
+
+    return B, action
+
 def nnlsRPM(thrust,
             x_torque,
             y_torque,
@@ -122,12 +151,12 @@ def nnlsRPM(thrust,
                         B,
                         maxiter=3*a.shape[1]
                         )
-        if gui:
-            print("[WARNING] iter", counter, "in utils.nnlsRPM(), unfeasible squared rotor speeds, using NNLS")
-            print("Negative sq. rotor speeds:\t [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sq_rpm[0], sq_rpm[1], sq_rpm[2], sq_rpm[3]),
-                   "\t\tNormalized: [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sq_rpm[0]/np.linalg.norm(sq_rpm), sq_rpm[1]/np.linalg.norm(sq_rpm), sq_rpm[2]/np.linalg.norm(sq_rpm), sq_rpm[3]/np.linalg.norm(sq_rpm)))
-            print("NNLS:\t\t\t\t [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sol[0], sol[1], sol[2], sol[3]),
-                  "\t\t\tNormalized: [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sol[0]/np.linalg.norm(sol), sol[1]/np.linalg.norm(sol), sol[2]/np.linalg.norm(sol), sol[3]/np.linalg.norm(sol)),
-                  "\t\tResidual: {:.2f}".format(res))
+        # if gui:
+        #     print("[WARNING] iter", counter, "in utils.nnlsRPM(), unfeasible squared rotor speeds, using NNLS")
+        #     print("Negative sq. rotor speeds:\t [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sq_rpm[0], sq_rpm[1], sq_rpm[2], sq_rpm[3]),
+        #            "\t\tNormalized: [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sq_rpm[0]/np.linalg.norm(sq_rpm), sq_rpm[1]/np.linalg.norm(sq_rpm), sq_rpm[2]/np.linalg.norm(sq_rpm), sq_rpm[3]/np.linalg.norm(sq_rpm)))
+        #     print("NNLS:\t\t\t\t [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sol[0], sol[1], sol[2], sol[3]),
+        #           "\t\t\tNormalized: [{:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(sol[0]/np.linalg.norm(sol), sol[1]/np.linalg.norm(sol), sol[2]/np.linalg.norm(sol), sol[3]/np.linalg.norm(sol)),
+        #           "\t\tResidual: {:.2f}".format(res))
         sq_rpm = sol
     return np.sqrt(sq_rpm)

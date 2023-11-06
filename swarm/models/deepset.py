@@ -41,6 +41,8 @@ class DeepSet(nn.Module):
 
 	def forward(self,x):
 		X = torch.zeros((len(x),self.rho.in_dim), device=self.device)
+		# print("[DeepSet] in_dim:", self.phi.in_dim)
+		# print("[DeepSet] x_size:", x.size())
 		num_elements = int(x.size()[1] / self.phi.in_dim)
 		for i in range(num_elements):
 			X += self.phi(x[:,i*self.phi.in_dim:(i+1)*self.phi.in_dim])
@@ -57,6 +59,8 @@ class FeedForward(nn.Module):
 		self.out_dim = layers[-1].out_features
 
 	def forward(self, x):
+		# print("[FeedForward] x_size:", x.size())
+		x = x.float()
 		for layer in self.layers[:-1]:
 			x = self.activation(layer(x))
 		x = self.layers[-1](x)
