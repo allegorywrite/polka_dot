@@ -38,7 +38,7 @@ from optimal.models.gitai import GITAI
 import random
 
 DEFAULT_RLLIB = False
-DEFAULT_GUI = False
+DEFAULT_GUI = True
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
@@ -158,7 +158,7 @@ def run(
             actions,
             rewards,
         )
-        # time.sleep(0.1)
+        time.sleep(0.1)
         
         # if i%env.SIM_FREQ == 0:
         #     env.render()

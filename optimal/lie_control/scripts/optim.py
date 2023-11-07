@@ -1,0 +1,367 @@
+import numpy as np
+import torch
+# from optimal.models.gitai import GITAI
+from optimal.lie_control.models.SE3FVIN import SE3FVIN
+from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
+from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
+import matplotlib.pyplot as plt
+import time
+import os
+from matplotlib.patches import Circle
+import mpl_toolkits.mplot3d.art3d as art3d
+import open3d as o3d
+from argparse import ArgumentParser
+from scipy.spatial.transform import Rotation
+
+class Optimizer:
+
+    def __init__(
+            self, 
+            initial_x, 
+            u_seq, 
+            x_target, 
+            model=None, 
+            model_based=False, 
+            latent_dim=12,
+            device=torch.device('cpu'),
+            env=None,
+            debug=False):
+        self.env = env
+        self.debug = debug
+        self.latent_dim = latent_dim
+        self.x_seq = torch.zeros((len(u_seq)+1, latent_dim)).to(device)
+        # initial_x_normalized = self.env._clipAndNormalizeState(initial_x)
+        self.x_seq[0] = torch.from_numpy(initial_x[:latent_dim]).float().to(device)
+        self.x_expert_seq = torch.zeros((len(u_seq)+1, initial_x.shape[0])).to(device)
+        self.x_expert_seq[0] = torch.from_numpy(initial_x).float().to(device)
+        self.u_seq = torch.from_numpy(u_seq).float().to(device)
+        self.model = model
+        self.device = device
+        self.x_target = x_target
+        self.x_target_normalized = [None for _ in range(len(x_target))]
+        for i in range(len(x_target)):
+            if x_target[i] is not None:
+                # x_target_normalized = self.env._clipAndNormalizeState(x_target[i])
+                self.x_target_normalized[i] = torch.from_numpy(x_target[i][:latent_dim]).float().to(device)
+        self.model_based = model_based
+        self.seq_len = u_seq.shape[0]
+        self.compute_x_seq(self.u_seq)
+
+        # privisional
+        self.xu_mat = torch.zeros((self.x_seq.shape[1], self.u_seq.shape[1])).to(self.device)
+        self.xx_mat = torch.zeros((self.x_seq.shape[1], self.x_seq.shape[1])).to(self.device)
+        self.x_mat = torch.zeros(self.x_seq.shape[1]).to(self.device)
+        self.identity = torch.eye(self.x_seq.shape[1]).to(self.device)
+
+        self.log_itr = 0
+
+    # (roll pitch yaw)がそれぞれ(x, y, z)の微分値であるようなモデルを考える
+    def model_based_model(self, x, u): # tensor -> tensor
+        delta = torch.zeros(x.shape).to(self.device)
+        if len(x.shape) == 1:
+            delta[0] = u[1]
+            delta[1] = u[2]
+            delta[2] = u[3]
+            delta[3] = u[1]*0.1
+            delta[4] = u[2]*0.1
+            delta[5] = u[3]*0.1
+        else:
+            A = torch.zeros((x.shape[0], x.shape[0])).to(self.device)
+            B = torch.zeros((x.shape[1], u.shape[1])).to(self.device)
+            B[0,1] = 1
+            B[1,2] = 1
+            B[2,3] = 1
+            B[3,1] = 0.1
+            B[4,2] = 0.1
+            B[5,3] = 0.1
+            B = B.to(dtype=torch.float32) 
+            u = u.to(dtype=torch.float32)
+            Bu = torch.mm(B, u.T).T
+            delta = torch.mm(A, x) + Bu
+        return delta
+    
+    def step(self, x, u):
+        if self.model_based:
+            x_next = x + self.model_based_model(x, u)
+            return x_next
+        input = torch.cat((x, u), len(x.shape)-1)
+        if len(input.shape) == 1:
+            input = input.unsqueeze(0)
+            input.requires_grad_(True)
+            x_next = self.model.forward_traininga(input).squeeze(0)[:self.latent_dim]
+        else:
+            input.requires_grad_(True)
+            x_next = self.model.forward_traininga(input)[:,:self.latent_dim]
+        if self.debug:
+            print("obs:", x)
+            print("action:", u)
+            print("x_next:", x_next)
+        return x_next
+    
+    def compute_x_seq(self, u_seq):
+        start = time.time()
+        self.env.reset()
+        for i in range(self.seq_len):
+            self.x_seq[i+1] = self.step(self.x_seq[i], u_seq[i])
+            obs, _, _, info = self.env.step(u_seq[i].detach().cpu().numpy())
+            # time.sleep(0.01)
+            # print("obs:", obs[0:3])
+            quat = info["raw_obs"][3:7]
+            R = Rotation.from_quat(quat)
+            rotmat = R.as_matrix()
+            ret = np.hstack([info["raw_obs"][0:3], rotmat.flatten(), info["raw_obs"][10:13], info["raw_obs"][13:16]]).reshape(self.x_expert_seq.shape[1],)
+            self.x_expert_seq[i+1] = torch.from_numpy(ret).float().to(self.device)
+            # print("x_expert_seq:", self.x_expert_seq[i+1])
+
+    def grad_xu(self, i, j):
+        # grad = torch.zeros((self.x_seq.shape[1], self.u_seq.shape[1]))
+        grad = self.xu_mat
+        if j < i - 1:
+            grad = torch.mm(self.grad_xx(i, i-1),self.grad_xu(i-1, j))
+        elif j == i - 1:
+            grad = self.grad_f(i-1)[1]
+        return grad
+
+    def grad_xx(self, i, j):
+        # grad = torch.zeros((self.x_seq.shape[1], self.x_seq.shape[1]))
+        grad = self.xx_mat
+        identity = self.identity
+        if j < i -1:
+            grad = torch.dot(self.grad_xx(i, i-1),self.grad_xx(i-1, j))
+        elif j == i - 1:
+            grad = self.grad_f(i-1)[0]
+        elif j == i:
+            grad = identity
+        return grad
+    
+    def compute_grad_f(self, x_seq, u_seq, batch_size=100):
+        x_seq_batch_list = torch.split(x_seq, batch_size)
+        u_seq_batch_list = torch.split(u_seq, batch_size)
+        
+        self.x_grad_mat_all = torch.zeros((0, x_seq.shape[1], x_seq.shape[1])).to(self.device)
+        self.u_grad_mat_all = torch.zeros((0, x_seq.shape[1], u_seq.shape[1])).to(self.device)
+        for i in range(len(x_seq_batch_list)):
+            x_seq_batch = x_seq_batch_list[i]
+            u_seq_batch = u_seq_batch_list[i]
+            x_seq_batch.requires_grad_(True)
+            u_seq_batch.requires_grad_(True)
+            x_next = self.step(x_seq_batch, u_seq_batch)
+            x_grad_mat = torch.zeros((x_next.shape[0], x_seq_batch.shape[1], x_seq_batch.shape[1])).to(self.device)
+            u_grad_mat = torch.zeros((x_next.shape[0], x_seq_batch.shape[1], u_seq_batch.shape[1])).to(self.device)
+
+            for j in range(x_next.shape[0]):# batch_size
+                for k in range(x_next.shape[1]): # state_size
+                    x_grad = torch.autograd.grad(x_next[j, k], x_seq_batch, create_graph=True)[0]
+                    x_grad_mat[j, k] = x_grad[j].detach()
+                    u_grad = torch.autograd.grad(x_next[j, k], u_seq_batch, create_graph=True)[0]
+                    u_grad_mat[j, k] = u_grad[j].detach()
+                    self.log_itr += 1
+
+            self.x_grad_mat_all = torch.cat((self.x_grad_mat_all, x_grad_mat), 0)
+            self.u_grad_mat_all = torch.cat((self.u_grad_mat_all, u_grad_mat), 0)
+
+    def grad_f(self, i):
+        grad_x = self.x_grad_mat_all[i]
+        grad_u = self.u_grad_mat_all[i]
+        return grad_x, grad_u
+
+    def partial_lx(self, i):
+        # 目的関数に依存
+        omega_target = 10
+        grad = self.x_mat
+        if type(self.x_target_normalized[i-1]) == torch.Tensor:
+            x_target = self.x_target_normalized[i-1]
+            grad = omega_target * 2 * (self.x_seq[i] - x_target)
+        return grad
+
+    def partial_lu(self, i):
+        # 目的関数に依存
+        omega_u = 0
+        omega_jerk = 0
+        grad = omega_u * 2 * self.u_seq[i]
+        if i == 0:
+            grad += omega_jerk * 2 * (self.u_seq[i] - self.u_seq[i+1])
+        elif i == self.u_seq.shape[0] - 1:
+            grad += omega_jerk * 2 * (self.u_seq[i] - self.u_seq[i-1])
+        else:
+            grad += omega_jerk * 2 * (- self.u_seq[i+1] + 2*self.u_seq[i] - self.u_seq[i-1])
+        return grad
+
+    def compute_grad(self):
+        grad_xu_mat = torch.zeros((self.seq_len, self.seq_len, self.x_seq.shape[1], self.u_seq.shape[1])).to(self.device)
+        for i in range(self.seq_len):
+            for j in range(self.seq_len):
+                grad_xu_mat[i, j] = self.grad_xu(i+1, j)
+
+        partial_lx = torch.stack([self.partial_lx(i+1) for i in range(self.seq_len)]).T
+        partial_lu = torch.stack([self.partial_lu(i) for i in range(self.seq_len)])
+        grad_u = torch.einsum('xi,ijxu->ju', partial_lx, grad_xu_mat) + partial_lu
+        grad_u_clipped = torch.clamp(grad_u, -1, 1)
+        # return grad_u_clipped
+        return grad_u
+    
+    def plot_quiver(self, ax, x, y, z, roll, pitch, yaw):
+        for i in range(len(x)):
+            R = np.array([[np.cos(yaw[i])*np.cos(pitch[i]), np.cos(yaw[i])*np.sin(pitch[i])*np.sin(roll[i])-np.sin(yaw[i])*np.cos(roll[i]), np.cos(yaw[i])*np.sin(pitch[i])*np.cos(roll[i])+np.sin(yaw[i])*np.sin(roll[i])],
+                        [np.sin(yaw[i])*np.cos(pitch[i]), np.sin(yaw[i])*np.sin(pitch[i])*np.sin(roll[i])+np.cos(yaw[i])*np.cos(roll[i]), np.sin(yaw[i])*np.sin(pitch[i])*np.cos(roll[i])-np.cos(yaw[i])*np.sin(roll[i])],
+                        [-np.sin(pitch[i]), np.cos(pitch[i])*np.sin(roll[i]), np.cos(pitch[i])*np.cos(roll[i])]])
+            v = np.dot(R, np.array([0, 0, 1])) 
+            ax.quiver(x[i], y[i], z[i], v[0], v[1], v[2], length=0.03, normalize=True, color="r")
+
+    def optim(self, optim_itr = 0, eta=0.5, plot=False):
+        if plot:#3d plot
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.set_xlabel("x")
+            ax.set_ylabel("y")
+            ax.set_zlabel("z")
+            x_seq = self.x_seq.detach().cpu().numpy()
+            # x_seq_expanded = self.env.expandState(x_seq)
+            x_seq_expanded = x_seq
+            x_expert_seq = self.x_expert_seq.detach().cpu().numpy()
+            # model prediction
+            ax.plot(x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], marker=",")
+            self.plot_quiver(ax, x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], x_seq_expanded[:, 3], x_seq_expanded[:, 4], x_seq_expanded[:, 5])
+            # expert trajectory
+            ax.plot(x_expert_seq[:, 0], x_expert_seq[:, 1], x_expert_seq[:, 2], marker=",", color="g")
+            self.plot_quiver(ax, x_expert_seq[:, 0], x_expert_seq[:, 1], x_expert_seq[:, 2], x_expert_seq[:, 3], x_expert_seq[:, 4], x_expert_seq[:, 5])
+
+            ax.plot([x_seq_expanded[0, 0]], [x_seq_expanded[0, 1]], [x_seq_expanded[0, 2]], marker="o", color="r")
+            # plot x_target
+            colors = ["b", "g", "r", "c", "m", "y", "k", "w"]
+            for i in range(len(self.x_target)):
+                # print(self.x_target[i], type(self.x_target[i]))
+                if type(self.x_target[i]) == list or type(self.x_target[i]) == np.ndarray:
+                    target = self.x_target[i]
+                    ax.plot([target[0]], [target[1]], [target[2]], marker="x", color=colors[i % len(colors)])
+                    ax.plot([x_seq_expanded[i][0]], [x_seq_expanded[i][1]], [x_seq_expanded[i][2]], marker="o", color=colors[i % len(colors)])
+            ax.set_xlim([-1, 1])
+            ax.set_ylim([-1, 1])
+            ax.set_zlim([0, 2])
+            plt.show()
+
+        # if plot:
+        #     o3d_vis = o3d.visualization.Visualizer()
+        #     o3d_vis.create_window(window_name='3D Viewer', width=400, height=300, visible=True)
+        #     lineset = o3d.geometry.LineSet()
+        #     lineset.points = o3d.utility.Vector3dVector(np.array([x_seq[:, 0], x_seq[:, 1], x_seq[:, 2]]).T)
+        #     lineset.lines = o3d.utility.Vector2iVector(np.array([[i, i+1] for i in range(x_seq.shape[0]-1)]))
+        #     lineset.colors = o3d.utility.Vector3dVector(np.array([[1, 0, 0] for i in range(x_seq.shape[0]-1)]))
+        #     o3d_vis.add_geometry(lineset)
+           
+            
+        X,Y,Z = [],[],[]
+
+        for i in range(optim_itr):
+            print("iteration:", i)
+            cm = plt.get_cmap("Spectral")
+            z = i/optim_itr
+            self.compute_grad_f(self.x_seq[:-1], self.u_seq)
+            grad = self.compute_grad()
+            self.u_seq = self.u_seq - eta * grad
+            self.compute_x_seq(self.u_seq)
+            x_seq = self.x_seq.detach().cpu().numpy()
+            # x_seq_expanded = self.env.expandState(x_seq)
+            x_seq_expanded = x_seq
+            X = np.append(X,[x_seq_expanded[:, 0]])
+            Y = np.append(Y,[x_seq_expanded[:, 1]])
+            Z = np.append(Z,[x_seq_expanded[:, 2]])
+            
+            X = X.reshape([i+1,x_seq_expanded.shape[0]])
+            Y = Y.reshape([i+1,x_seq_expanded.shape[0]])
+            Z = Z.reshape([i+1,x_seq_expanded.shape[0]])
+        
+            if plot:
+                ax.plot(X[i], Y[i], Z[i], marker=",", color = cm(z)) 
+
+        print("log_itr:", self.log_itr)
+        ax.plot([x_seq_expanded[-1, 0]], [x_seq_expanded[-1, 1]], [x_seq_expanded[-1, 2]], marker="o", color="r")
+
+        if plot:
+            x_expert_seq = self.x_expert_seq.detach().cpu().numpy()
+            # ax.plot(x_expert_seq[:, 0], x_expert_seq[:, 1], x_expert_seq[:, 2], marker=",", color="r")
+            # ax.set_xlim([-0.1, 0.1])
+            # ax.set_ylim([-0.1, 0.1])
+            # ax.set_zlim([0, 0.2])
+            # ax.set_xlim([-1, 1])
+            # ax.set_ylim([-1, 1])
+            # ax.set_zlim([0, 2])
+            # plt.show()     
+
+        # if plot:
+        #     o3d_vis.run()   
+
+        return self.u_seq
+
+if __name__ == "__main__":
+
+    parser = ArgumentParser()
+    parser.add_argument('--debug', action='store_true', help='debug mode')
+    args = parser.parse_args()
+
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+
+    time_step = 30
+    state_dim = 18 # x, y, z, R, vx, vy, vz, wx, wy, wz
+    latent_dim = 18 # x, y, z, R, vx, vy, vz, wx, wy, wz
+    initial_x = np.zeros(state_dim)
+    initial_x[2] = 1
+    # initial_u_seq = np.concatenate([np.array([[1, 0.2, 0.2, 0] for _ in range(int(time_step/2))]), np.array([[1, -0.2, 0.2, 0] for _ in range(int(time_step/2))])]) # thrust, roll, pitch, yaw
+    initial_u_seq = np.concatenate([np.array([[10, 0, 0, 0] for _ in range(int(time_step))])])
+    model_based = False
+
+    DEFAULT_GUI = False
+    DEFAULT_RECORD_VIDEO = False
+    DEFAULT_OUTPUT_FOLDER = 'results'
+    DEFAULT_COLAB = False
+    DEFAULT_SIMULATION_FREQ_HZ = 240
+    DEFAULT_CONTROL_FREQ_HZ = 60
+    AGGR_PHY_STEPS = int(DEFAULT_SIMULATION_FREQ_HZ/DEFAULT_CONTROL_FREQ_HZ)
+
+    env = HoverAviary(
+        gui=DEFAULT_GUI,
+        act=ActionType.DYN,
+        initial_xyzs=np.array([initial_x[:3]]),
+        initial_rpys=np.array([initial_x[3:6]]),
+        freq=DEFAULT_SIMULATION_FREQ_HZ,
+        aggregate_phy_steps=AGGR_PHY_STEPS,
+        )
+    
+    dt = 1.0 / DEFAULT_CONTROL_FREQ_HZ
+    dynamics_model = SE3FVIN(device=device, time_step=dt).to(device)
+    path = os.path.join(os.path.dirname(__file__), "../data/quadrotor-se3fvin-vin-5p5-40000.tar")
+    dynamics_model.load_state_dict(torch.load(path, map_location=device))
+
+    # dynamics_model = GITAI(
+    #     output_shape=env.observation_space.shape[0]-3,
+    #     input_shape=env.observation_space.shape[0]-6+env.action_space.shape[0],
+    #     device=device)
+    # dynamics_model.load_state_dict(torch.load(os.path.join(os.path.dirname(__file__), "../results/dynamics_model.pt")))
+
+    # print("input_shape:", env.observation_space.shape[0]+env.action_space.shape[0])
+    # print("output_shape:", env.observation_space.shape[0])
+
+    x_target = [None for _ in range(time_step)]
+    # x_target[10] = np.array([0.2, 0.3, -0.1,
+    #                          0, 0, 0, 0, 0, 0, 0, 0, 0])
+    # x_target[20] = np.array([0.5, 0.3, -0.1,
+    #                          0, 0, 0, 0, 0, 0, 0, 0, 0])
+    x_target[-1] = np.array([0.5, 0, 1.3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    optim = Optimizer(
+        initial_x=initial_x,
+        u_seq=initial_u_seq,
+        x_target=x_target,
+        model=dynamics_model,
+        device=device,
+        model_based=model_based,
+        latent_dim=latent_dim,
+        env=env,
+        debug=args.debug,
+        )
+    start = time.time()
+    optim.optim(plot=True)
+    elapsed_time = time.time() - start
+    print("elapsed_time:{0}".format(elapsed_time) + "[sec]")

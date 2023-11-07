@@ -318,14 +318,14 @@ class BaseAviary(gym.Env):
         else:
             self._saveLastAction(action)
             rpm = self._preprocessAction(action)
-            dif_output, recon_action = computeDiffOutput(
-                            rpm=rpm,
-                            a=self.A,
-                            b_coeff_inv=self.B_COEFF_INV,
-                            gravity=self.GRAVITY,
-                            max_xy_torque=self.MAX_XY_TORQUE,
-                            max_z_torque=self.MAX_Z_TORQUE,
-                            )
+            # dif_output, recon_action = computeDiffOutput(
+            #                 rpm=rpm,
+            #                 a=self.A,
+            #                 b_coeff_inv=self.B_COEFF_INV,
+            #                 gravity=self.GRAVITY,
+            #                 max_xy_torque=self.MAX_XY_TORQUE,
+            #                 max_z_torque=self.MAX_Z_TORQUE,
+            #                 )
             clipped_action = np.reshape(rpm, (self.NUM_DRONES, 4))
         #### Repeat for as many as the aggregate physics steps #####
         for _ in range(self.AGGR_PHY_STEPS):
@@ -367,7 +367,7 @@ class BaseAviary(gym.Env):
         info = self._computeInfo()
         #### Advance the step counter ##############################
         self.step_counter = self.step_counter + (1 * self.AGGR_PHY_STEPS)
-        obs, reward, done, info = self._afterStep(obs, reward, done, info, dif_output)
+        # obs, reward, done, info = self._afterStep(obs, reward, done, info, dif_output)
         return obs, reward, done, info
     
     ################################################################################
