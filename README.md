@@ -9,5 +9,9 @@ cd optimal/lie_control
 # ダイナミクスの学習
 python scripts/control.py
 # 軌道の最適化
-python scripts/optim.py
+python scripts/optim.py --open3d
+# シミュレーションの描画 --gui 
+# matplotlibで描画 --matplotlib
+# フィードバック最適化 --feedback
+# 最適化の回数(default:1) --optim_itr 10 
 ```

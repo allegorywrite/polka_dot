@@ -376,7 +376,7 @@ class Optimizer:
             v = np.dot(R, np.array([0, 0, 1])) 
             ax.quiver(x[i], y[i], z[i], v[0], v[1], v[2], length=0.03, normalize=True, color="r")
 
-    def optim(self, optim_itr = 20, eta=1, plot=False, plot3d=False, feedback=False):
+    def optim(self, optim_itr = 1, eta=1, plot=False, plot3d=False, feedback=False):
         x_seq = self.x_seq.detach().cpu().numpy()
         # x_seq_expanded = self.env.expandState(x_seq)
         x_seq_expanded = x_seq
@@ -492,6 +492,10 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument('--gui', action='store_true', help='debug mode')
+    parser.add_argument('--open3d', action='store_true', help='debug mode')
+    parser.add_argument('--matplotlib', action='store_true', help='debug mode')
+    parser.add_argument('--feedback', action='store_true', help='debug mode')
+    parser.add_argument('--optim_itr', type=int, default=1, help='debug mode')
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -510,14 +514,8 @@ if __name__ == "__main__":
     initial_u_seq = np.concatenate([np.array([[0.5, 0, 0.5, 0] for _ in range(int(time_step))])])
     model_based = False
 
-    # DEFAULT_GUI = True
-    DEFAULT_RECORD_VIDEO = False
-    DEFAULT_OUTPUT_FOLDER = 'results'
-    DEFAULT_COLAB = False
     DEFAULT_SIMULATION_FREQ_HZ = 240
     DEFAULT_CONTROL_FREQ_HZ = 60
-    # DEFAULT_SIMULATION_FREQ_HZ = 600
-    # DEFAULT_CONTROL_FREQ_HZ = 600
     AGGR_PHY_STEPS = int(DEFAULT_SIMULATION_FREQ_HZ/DEFAULT_CONTROL_FREQ_HZ)
 
     env = HoverAviary(
@@ -535,10 +533,6 @@ if __name__ == "__main__":
     dynamics_model.load_state_dict(torch.load(path, map_location=device))
 
     x_target = [None for _ in range(time_step)]
-    # x_target[10] = np.array([0.2, 0.3, -0.1,
-    #                          0, 0, 0, 0, 0, 0, 0, 0, 0])
-    # x_target[20] = np.array([0.5, 0.3, -0.1,
-    #                          0, 0, 0, 0, 0, 0, 0, 0, 0])
     x_target[-1] = np.array([0.4, 0.5, 1.3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     x_target[-1][3:12] = Rotation.from_euler('xyz', [0, 1, 0]).as_matrix().flatten()
     traj_optimizer = Optimizer(
@@ -554,9 +548,10 @@ if __name__ == "__main__":
         )
     start = time.time()
     traj_optimizer.optim(
-        plot=False, 
-        plot3d=True,
-        feedback=False,
+        optim_itr=args.optim_itr,
+        plot=args.matplotlib, 
+        plot3d=args.open3d,
+        feedback=args.feedback,
     )
     elapsed_time = time.time() - start
     print("elapsed_time:{0}".format(elapsed_time) + "[sec]")

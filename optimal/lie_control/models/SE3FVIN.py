@@ -1045,11 +1045,6 @@ class SE3FVIN(torch.nn.Module):
         
     def save(self, train_loss_array, eval_loss_array, dir):
         torch.save(self.state_dict(), os.path.join(dir, "dynamics_model.pth"))
-        # plt.plot(train_loss_array, label="train loss")
-        # plt.plot(eval_loss_array, label="eval loss")
-        # plt.legend()
-        # plt.savefig(os.path.join(dir, "loss.png"))
-        #二枚に分ける
         plt.plot(train_loss_array)
         plt.title("train loss")
         plt.savefig(os.path.join(dir, "train_loss.png"))
