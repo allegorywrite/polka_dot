@@ -30,6 +30,7 @@ class ObservationType(Enum):
     """Observation type enumeration class."""
     KIN = "kin"     # Kinematic information (pose, linear and angular velocities)
     RGB = "rgb"     # RGB camera capture in each drone's POV
+    Lie = "lie"     # Raw state vector (pose, linear and angular velocities, RPMs)
 
     """Original observation type"""
     VIS = "vis"     # Visual information (depth and segmentation maps)
@@ -345,6 +346,12 @@ class BaseSingleAgentAviary(BaseAviary):
                               dtype=np.float32
                               )
             ############################################################
+        elif self.OBS_TYPE == ObservationType.Lie:
+            return spaces.Box(low=-np.inf,
+                              high=np.inf,
+                              shape=(18,),
+                              dtype=np.float32
+                              )
         else:
             print("[ERROR] in BaseSingleAgentAviary._observationSpace()")
     
@@ -382,6 +389,8 @@ class BaseSingleAgentAviary(BaseAviary):
             ret = np.hstack([obs[0:3], obs[7:10], obs[10:13], obs[13:16]]).reshape(12,)
             return ret.astype('float32')
             ############################################################
+        elif self.OBS_TYPE == ObservationType.Lie:
+            return self._getDroneStateVector(0)
         else:
             print("[ERROR] in BaseSingleAgentAviary._computeObs()")
     

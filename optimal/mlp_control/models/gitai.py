@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import os
-from optimal.systems.utils import EarlyStopping
+from optimal.mlp_control.systems.utils import EarlyStopping
 
 def init(module, weight_init, bias_init, gain=1):
     weight_init(module.weight.data, gain=gain)

@@ -3,10 +3,11 @@ import torch
 import torch.nn as nn
 import numpy as np
 from optimal.lie_control.models.nn_models import MLP, PSD, MatrixNet, Mass, MassFixed
-from optimal.lie_control.models.utils import L2_loss, hat_map, vee_map, hat_map_batch, vee_map_batch, compute_rotation_matrix_from_quaternion
+from optimal.lie_control.models.utils import L2_loss, hat_map, vee_map, hat_map_batch, vee_map_batch, compute_rotation_matrix_from_quaternion, batch_kron, flat_trans
 import matplotlib.pyplot as plt
 import os
-
+from optimal.mlp_control.systems.utils import EarlyStopping
+torch.set_default_dtype(torch.float32)
 
 class SE3FVIN(torch.nn.Module):
     def __init__(
@@ -58,6 +59,9 @@ class SE3FVIN(torch.nn.Module):
             self.g_net = MatrixNet(self.posedim, 10, self.twistdim*self.udim, shape=(self.twistdim,self.udim), init_gain=3*init_gain).to(device)
         else:
             self.g_net = g_net
+        self.optimizer = torch.optim.Adam(self.parameters(), 1e-3, weight_decay=0.0)
+        self.earlystopping = EarlyStopping(patience=10, verbose=True)
+        self.max_grad_norm = 0.5
         self.nfe = 0
         self.G = 9.8
         self.h = time_step
@@ -76,7 +80,7 @@ class SE3FVIN(torch.nn.Module):
         Xgrid[:, 0] = np.reshape(xx, (batch,))
         Xgrid[:, 1] = np.reshape(yy, (batch,))
         Xgrid[:, 2] = np.reshape(zz, (batch,))
-        Xgrid = torch.tensor(Xgrid, dtype=torch.float64).view(batch, 3).to(self.device)
+        Xgrid = torch.tensor(Xgrid, dtype=torch.float32).view(batch, 3).to(self.device)
         ######################################
         m_net1_hat = self.M_net1(Xgrid)
         m = 1.0
@@ -108,7 +112,7 @@ class SE3FVIN(torch.nn.Module):
         u1, u2, u3 = rand_[:,0], rand_[:, 1], rand_[:, 2]
         quat = np.array([np.sqrt(1 - u1) * np.sin(2 * np.pi * u2), np.sqrt(1 - u1) * np.cos(2 * np.pi * u2),
                               np.sqrt(u1) * np.sin(2 * np.pi * u3), np.sqrt(u1) * np.cos(2 * np.pi * u3)])
-        q_tensor = torch.tensor(quat.transpose(), dtype=torch.float64).view(batch, 4).to(self.device)
+        q_tensor = torch.tensor(quat.transpose(), dtype=torch.float32).view(batch, 4).to(self.device)
         R_tensor = compute_rotation_matrix_from_quaternion(q_tensor)
         R_tensor = R_tensor.view(-1, 9)
         m_net2_hat = self.M_net2(R_tensor)
@@ -143,7 +147,7 @@ class SE3FVIN(torch.nn.Module):
         with torch.enable_grad():
             self.nfe += 1
             bs = x.shape[0]
-            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float64, device=self.device)
+            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float32, device=self.device)
             I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
             qk, qk_dot, uk = torch.split(x, [self.posedim, self.twistdim, self.udim], dim=1)
 
@@ -155,7 +159,7 @@ class SE3FVIN(torch.nn.Module):
             if gtM:
                 Mx_inv = (1 / m) * I33
                 J_inv = np.diag([1 / 2.3951, 1 / 2.3951, 1 / 3.2347]) * 1e5  # np.diag([1/1.4, 1/1.4, 1/2.17])*1e5
-                J_inv = torch.tensor(J_inv, dtype=torch.float64).to(self.device)
+                J_inv = torch.tensor(J_inv, dtype=torch.float32).to(self.device)
                 J_inv = J_inv.reshape((1, 3, 3))
                 MR_inv = J_inv.repeat(bs, 1, 1).to(self.device)
             else:
@@ -169,7 +173,7 @@ class SE3FVIN(torch.nn.Module):
                               [0.0, 1.0, 0.0, 0.0],
                               [0.0, 0.0, 1.0, 0.0],
                               [0.0, 0.0, 0.0, 1.0]])
-                f = torch.tensor(f, dtype=torch.float64).to(self.device)
+                f = torch.tensor(f, dtype=torch.float32).to(self.device)
                 f = f.reshape((1, 6, 4))
                 g_qk = f.repeat(bs, 1, 1).to(self.device)
             else:
@@ -187,8 +191,8 @@ class SE3FVIN(torch.nn.Module):
                     fk_plus = (1-c)*self.h*torch.matmul(g_qk, torch.unsqueeze(uk, dim = 2))
             else:
                 # Not sure if this is the right ground-truth?
-                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float64, device=self.device)
-                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float64, device=self.device)
+                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float32, device=self.device)
+                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float32, device=self.device)
 
             fxk_minus, fRk_minus = torch.split(fk_minus, [self.linveldim, self.angveldim], dim=1)
             fxk_plus, fRk_plus = torch.split(fk_plus, [self.linveldim, self.angveldim], dim=1)
@@ -220,6 +224,19 @@ class SE3FVIN(torch.nn.Module):
 
             alpha = 0.5
             a = self.h*pRk + (1-alpha)*self.h**2 * Mk + self.h *torch.squeeze(fRk_minus)
+            # print("a: ", a)
+
+            # Sa = hat_map_batch(a)
+            # Sa_vecor = torch.transpose(Sa, 1, 2).reshape(Sa.shape[0], -1)
+            # Z = batch_kron(Jd, I33) - flat_trans(batch_kron(I33, Jd))
+            # print("Z: ", Z, Z.shape)
+            # Z_inv = torch.inverse(Z)
+            # A = torch.bmm(Z_inv, Sa_vecor.unsqueeze(-1)).squeeze(-1)
+            # Fk = A.view(-1, 3, 3)
+            # # print("Fk1: ", Fk, Fk.shape)
+            # conf1 = torch.bmm(Fk, Jd) - torch.bmm(Jd, torch.transpose(Fk, 1, 2)) - Sa
+            # print("conf1: ", conf1, conf1.shape)
+
             v = torch.zeros_like(a)
             for i in range(self.implicit_step):
                 aTv = torch.unsqueeze(torch.sum(a*v, dim = 1), dim = 1)
@@ -239,6 +256,10 @@ class SE3FVIN(torch.nn.Module):
             v = v[:,:,None]
             u2 = 1 + torch.matmul(torch.transpose(v,1,2), v)
             Fk = (u2*I33 + 2*Sv + 2 * torch.matmul(Sv, Sv))/u2
+            # print("Fk2: ", Fk, Fk.shape)
+
+            # conf2 = torch.bmm(Fk, Jd) - torch.bmm(Jd, torch.transpose(Fk, 1, 2)) - Sa
+            # print("conf2: ", conf2, conf1.shape)
 
             Rk_next = torch.matmul(Rk, Fk)
             qRk_next = Rk_next.view(-1, 9)
@@ -275,15 +296,15 @@ class SE3FVIN(torch.nn.Module):
 
             return torch.cat((qk_next, vk_next, omegak_next, uk), dim=1)
         
-    
-    def forward(self, x):
+
+    def forward_trainingc(self, x):
         enable_force = True
         gtM, gtG, gtV = False, False, False
         use_dVNet = False
         with torch.enable_grad():
             self.nfe += 1
             bs = x.shape[0]
-            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float64, device=self.device)
+            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float32, device=self.device)
             I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
             qk, qk_dot, uk = torch.split(x, [self.posedim, self.twistdim, self.udim], dim=1)
 
@@ -295,7 +316,7 @@ class SE3FVIN(torch.nn.Module):
             if gtM:
                 Mx_inv = (1 / m) * I33
                 J_inv = np.diag([1 / 2.3951, 1 / 2.3951, 1 / 3.2347]) * 1e5  # np.diag([1/1.4, 1/1.4, 1/2.17])*1e5
-                J_inv = torch.tensor(J_inv, dtype=torch.float64).to(self.device)
+                J_inv = torch.tensor(J_inv, dtype=torch.float32).to(self.device)
                 J_inv = J_inv.reshape((1, 3, 3))
                 MR_inv = J_inv.repeat(bs, 1, 1).to(self.device)
             else:
@@ -309,7 +330,7 @@ class SE3FVIN(torch.nn.Module):
                               [0.0, 1.0, 0.0, 0.0],
                               [0.0, 0.0, 1.0, 0.0],
                               [0.0, 0.0, 0.0, 1.0]])
-                f = torch.tensor(f, dtype=torch.float64).to(self.device)
+                f = torch.tensor(f, dtype=torch.float32).to(self.device)
                 f = f.reshape((1, 6, 4))
                 g_qk = f.repeat(bs, 1, 1).to(self.device)
             else:
@@ -327,8 +348,154 @@ class SE3FVIN(torch.nn.Module):
                     fk_plus = (1-c)*self.h*torch.matmul(g_qk, torch.unsqueeze(uk, dim = 2))
             else:
                 # Not sure if this is the right ground-truth?
-                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float64, device=self.device)
-                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float64, device=self.device)
+                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float32, device=self.device)
+                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float32, device=self.device)
+
+            fxk_minus, fRk_minus = torch.split(fk_minus, [self.linveldim, self.angveldim], dim=1)
+            fxk_plus, fRk_plus = torch.split(fk_plus, [self.linveldim, self.angveldim], dim=1)
+            MR = torch.inverse(MR_inv)
+            Mx = torch.inverse(Mx_inv)
+            #I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
+            traceM = MR[:,0,0] + MR[:,1,1] + MR[:,2,2]
+            traceM = traceM[:, None, None]
+            #temp = traceM*I33
+            Jd = traceM*I33/2 - MR
+            omegak_aug = torch.unsqueeze(omegak, dim=2)
+            pRk = torch.squeeze(torch.matmul(MR, omegak_aug), dim=2)
+            vk_aug = torch.unsqueeze(vk, dim=2)
+            pxk = torch.squeeze(torch.matmul(Mx, vk_aug), dim=2)
+
+            if use_dVNet:
+                dVqk = self.dV_net(qk)
+            else:
+                if gtV:
+                    V_qk = m * self.G * qk[:, 2]
+                else:
+                    V_qk = self.V_net(qk)
+                dVqk = torch.autograd.grad(V_qk.sum(), qk, create_graph=True)[0]
+            dVxk, dVRk = torch.split(dVqk, [self.xdim, self.Rdim], dim=1)
+            dVRk = dVRk.view(-1, 3, 3)
+            SMk = torch.matmul(torch.transpose(dVRk, 1, 2), Rk) - torch.matmul(torch.transpose(Rk, 1, 2), dVRk)
+            Mk = torch.stack((SMk[:, 2, 1], SMk[:, 0, 2], SMk[:, 1, 0]),dim=1)
+
+
+            alpha = 0.5
+            a = self.h*pRk + (1-alpha)*self.h**2 * Mk + self.h *torch.squeeze(fRk_minus)
+            Sa = hat_map_batch(a)
+            print("Sa: ", Sa)
+            Sa_vecor = Sa.flatten(start_dim=1)
+            print("Sa_vecor: ", Sa_vecor)
+
+
+
+            # v = torch.zeros_like(a)
+            # for i in range(self.implicit_step):
+            #     aTv = torch.unsqueeze(torch.sum(a*v, dim = 1), dim = 1)
+            #     # temp1= torch.cross(a,v, dim=1)
+            #     # temp2 = a*aTv
+            #     # temp3 = 2*torch.squeeze(torch.matmul(Jd, v[:,:,None]))
+            #     phi = a + torch.cross(a,v, dim=1) + v*aTv - \
+            #           2*torch.squeeze(torch.matmul(MR, v[:,:,None]))
+            #     # temp1 = hat_map_batch(a)
+            #     # temp2 = aTv[:,:,None]*I33
+            #     dphi = hat_map_batch(a) + aTv[:,:,None]*I33 - 2*MR + torch.matmul(v[:,:,None], torch.transpose(a[:,:,None], 1,2))
+            #     dphi_inv = torch.inverse(dphi)
+            #     v = v - torch.squeeze(torch.matmul(dphi_inv, phi[:,:,None]))
+
+            # #Fk0 = torch.matmul((I33 + hat_map_batch(v)), torch.inverse((I33 - hat_map_batch(v))))
+            # Sv = hat_map_batch(v)
+            # v = v[:,:,None]
+            # u2 = 1 + torch.matmul(torch.transpose(v,1,2), v)
+            # Fk = (u2*I33 + 2*Sv + 2 * torch.matmul(Sv, Sv))/u2
+
+            Rk_next = torch.matmul(Rk, Fk)
+            qRk_next = Rk_next.view(-1, 9)
+            qxk_next = qxk + self.h*torch.squeeze(torch.matmul(Mx_inv, torch.unsqueeze(pxk, dim=2))) - \
+                       self.h*torch.squeeze(torch.matmul(Mx_inv, torch.matmul(Rk, fxk_minus)))  - \
+                       ((1-alpha)*(self.h**2))*torch.squeeze(torch.matmul(Mx_inv,torch.unsqueeze(dVxk,dim=2)))
+            qk_next = torch.cat((qxk_next, qRk_next), dim = 1)
+
+            if use_dVNet:
+                dVqk_next = self.dV_net(qk_next)
+            else:
+                if gtV:
+                    V_qk_next = m * self.G * qk_next[:, 2]
+                else:
+                    V_qk_next = self.V_net(qk_next)
+                dVqk_next = torch.autograd.grad(V_qk_next.sum(), qk_next, create_graph=True)[0]
+
+            dVxk_next, dVRk_next = torch.split(dVqk_next, [self.xdim, self.Rdim], dim=1)
+            dVRk_next = dVRk_next.view(-1, 3, 3)
+            SMk_next = torch.matmul(torch.transpose(dVRk_next, 1, 2), Rk_next) - \
+                       torch.matmul(torch.transpose(Rk_next, 1, 2), dVRk_next)
+            Mk_next = torch.stack((SMk_next[:, 2, 1], SMk_next[:, 0, 2], SMk_next[:, 1, 0]), dim = 1)
+
+            FkT = torch.transpose(Fk, 1, 2)
+            pRk_next = torch.matmul(FkT, pRk[:,:,None]) + (1-alpha)*self.h*torch.matmul(FkT, Mk[:,:,None]) +\
+                       alpha*self.h*Mk_next[:,:,None] + torch.matmul(FkT, fRk_minus) + fRk_plus
+
+            pxk_next = -(1-alpha)*self.h*dVxk - alpha*self.h*dVxk_next + \
+                       torch.squeeze(torch.matmul(Rk, fxk_minus)) + torch.squeeze(torch.matmul(Rk_next, fxk_plus))
+            omegak_next = torch.matmul(MR_inv, pRk_next)
+            omegak_next = omegak_next[:,:,0]
+            vk_next = torch.matmul(Mx_inv, torch.unsqueeze(pxk_next, dim = 2)) + vk_aug
+            vk_next = vk_next[:,:,0]
+
+            return torch.cat((qk_next, vk_next, omegak_next, uk), dim=1)
+    
+    def forward(self, x):
+        enable_force = True
+        gtM, gtG, gtV = False, False, False
+        use_dVNet = False
+        with torch.enable_grad():
+            self.nfe += 1
+            bs = x.shape[0]
+            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float32, device=self.device)
+            I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
+            qk, qk_dot, uk = torch.split(x, [self.posedim, self.twistdim, self.udim], dim=1)
+
+            qxk, qRk = torch.split(qk, [self.xdim, self.Rdim], dim=1)
+            vk, omegak = torch.split(qk_dot, [self.linveldim, self.angveldim], dim=1)
+            Rk = qRk.view(-1, 3, 3)
+
+            m = 0.027
+            if gtM:
+                Mx_inv = (1 / m) * I33
+                J_inv = np.diag([1 / 2.3951, 1 / 2.3951, 1 / 3.2347]) * 1e5  # np.diag([1/1.4, 1/1.4, 1/2.17])*1e5
+                J_inv = torch.tensor(J_inv, dtype=torch.float32).to(self.device)
+                J_inv = J_inv.reshape((1, 3, 3))
+                MR_inv = J_inv.repeat(bs, 1, 1).to(self.device)
+            else:
+                Mx_inv = self.M_net1(qxk)
+                MR_inv = self.M_net2(qRk)
+
+            if gtG:
+                f = np.array([[0.0, 0.0, 0.0, 0.0],
+                              [0.0, 0.0, 0.0, 0.0],
+                              [1.0, 0.0, 0.0, 0.0],
+                              [0.0, 1.0, 0.0, 0.0],
+                              [0.0, 0.0, 1.0, 0.0],
+                              [0.0, 0.0, 0.0, 1.0]])
+                f = torch.tensor(f, dtype=torch.float32).to(self.device)
+                f = f.reshape((1, 6, 4))
+                g_qk = f.repeat(bs, 1, 1).to(self.device)
+            else:
+                g_qk = self.g_net(qk)
+                #print("##################: \n", g_qk[0,:,:])
+
+            #uk = torch.unsqueeze(uk, dim=2)
+            c = 0.5
+            if enable_force:
+                if self.udim == 1:
+                    fk_minus = c*self.h * g_qk * uk
+                    fk_plus = (1-c)*self.h * g_qk * uk
+                else:
+                    fk_minus = c*self.h *torch.matmul(g_qk, torch.unsqueeze(uk, dim = 2))
+                    fk_plus = (1-c)*self.h*torch.matmul(g_qk, torch.unsqueeze(uk, dim = 2))
+            else:
+                # Not sure if this is the right ground-truth?
+                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float32, device=self.device)
+                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float32, device=self.device)
 
             fxk_minus, fRk_minus = torch.split(fk_minus, [self.linveldim, self.angveldim], dim=1)
             fxk_plus, fRk_plus = torch.split(fk_plus, [self.linveldim, self.angveldim], dim=1)
@@ -423,7 +590,7 @@ class SE3FVIN(torch.nn.Module):
         with torch.enable_grad():
             self.nfe += 1
             bs = x.shape[0]
-            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float64, device=self.device)
+            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float32, device=self.device)
             I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
             qk, qk_dot = torch.split(x, [self.posedim, self.twistdim], dim=1)
 
@@ -436,7 +603,7 @@ class SE3FVIN(torch.nn.Module):
             if gtM:
                 Mx_inv = (1 / m) * I33
                 J_inv = np.diag([1 / 2.3951, 1 / 2.3951, 1 / 3.2347]) * 1e5  # np.diag([1/1.4, 1/1.4, 1/2.17])*1e5
-                J_inv = torch.tensor(J_inv, dtype=torch.float64).to(self.device)
+                J_inv = torch.tensor(J_inv, dtype=torch.float32).to(self.device)
                 J_inv = J_inv.reshape((1, 3, 3))
                 MR_inv = J_inv.repeat(bs, 1, 1).to(self.device)
             else:
@@ -450,7 +617,7 @@ class SE3FVIN(torch.nn.Module):
                               [0.0, 1.0, 0.0, 0.0],
                               [0.0, 0.0, 1.0, 0.0],
                               [0.0, 0.0, 0.0, 1.0]])
-                f = torch.tensor(f, dtype=torch.float64).to(self.device)
+                f = torch.tensor(f, dtype=torch.float32).to(self.device)
                 f = f.reshape((1, 6, 4))
                 g_qk = f.repeat(bs, 1, 1).to(self.device)
             else:
@@ -467,8 +634,8 @@ class SE3FVIN(torch.nn.Module):
                     fk_plus = (1-c)*self.h*torch.matmul(g_qk, torch.unsqueeze(u, dim = 2))
             else:
                 # Not sure if this is the right ground-truth?
-                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float64, device=self.device)
-                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float64, device=self.device)
+                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float32, device=self.device)
+                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float32, device=self.device)
 
             fxk_minus, fRk_minus = torch.split(fk_minus, [self.linveldim, self.angveldim], dim=1)
             fxk_plus, fRk_plus = torch.split(fk_plus, [self.linveldim, self.angveldim], dim=1)
@@ -552,7 +719,7 @@ class SE3FVIN(torch.nn.Module):
         with torch.enable_grad():
             self.nfe += 1
             bs = x.shape[0]
-            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float64, device=self.device)
+            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float32, device=self.device)
             I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
             qk, qk_dot, uk = torch.split(x, [self.posedim, self.twistdim, self.udim], dim=1)
 
@@ -564,7 +731,7 @@ class SE3FVIN(torch.nn.Module):
             #Mx_inv = self.M_net1(qxk)
 
             J_inv = np.diag([1/2.3951, 1/2.3951, 1/3.2347])*1e5 #np.diag([1/1.4, 1/1.4, 1/2.17])*1e5
-            J_inv = torch.tensor(J_inv, dtype=torch.float64).to(self.device)
+            J_inv = torch.tensor(J_inv, dtype=torch.float32).to(self.device)
             J_inv = J_inv.reshape((1, 3, 3))
             MR_inv = J_inv.repeat(bs, 1, 1).to(self.device)
 
@@ -575,7 +742,7 @@ class SE3FVIN(torch.nn.Module):
                          [0.0, 1.0, 0.0, 0.0],
                          [0.0, 0.0, 1.0, 0.0],
                          [0.0, 0.0, 0.0, 1.0]])
-            f = torch.tensor(f, dtype=torch.float64).to(self.device)
+            f = torch.tensor(f, dtype=torch.float32).to(self.device)
             f = f.reshape((1, 6, 4))
             g_qk = f.repeat(bs, 1, 1).to(self.device)
             #uk = torch.unsqueeze(uk, dim=2)
@@ -589,8 +756,8 @@ class SE3FVIN(torch.nn.Module):
                     fk_plus = (1-c)*self.h*torch.matmul(g_qk, torch.unsqueeze(uk, dim = 2))
             else:
                 # Not sure if this is the right ground-truth?
-                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float64, device=self.device)
-                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float64, device=self.device)
+                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float32, device=self.device)
+                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float32, device=self.device)
 
             fxk_minus, fRk_minus = torch.split(fk_minus, [self.linveldim, self.angveldim], dim=1)
             fxk_plus, fRk_plus = torch.split(fk_plus, [self.linveldim, self.angveldim], dim=1)
@@ -666,7 +833,7 @@ class SE3FVIN(torch.nn.Module):
         with torch.enable_grad():
             self.nfe += 1
             bs = x.shape[0]
-            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float64, device=self.device)
+            #zero_vec = torch.zeros(bs, self.u_dim, dtype=torch.float32, device=self.device)
             I33 = torch.eye(3).repeat(bs, 1, 1).to(self.device)
             qk, qk_dot, uk = torch.split(x, [self.posedim, self.twistdim, self.udim], dim=1)
 
@@ -678,7 +845,7 @@ class SE3FVIN(torch.nn.Module):
             #Mx_inv = self.M_net1(qxk)
 
             J_inv = np.diag([1/2.3951, 1/2.3951, 1/3.2347])*1e5 #np.diag([1/1.4, 1/1.4, 1/2.17])*1e5
-            J_inv = torch.tensor(J_inv, dtype=torch.float64).to(self.device)
+            J_inv = torch.tensor(J_inv, dtype=torch.float32).to(self.device)
             J_inv = J_inv.reshape((1, 3, 3))
             MR_inv = J_inv.repeat(bs, 1, 1).to(self.device)
 
@@ -689,7 +856,7 @@ class SE3FVIN(torch.nn.Module):
                          [0.0, 1.0, 0.0, 0.0],
                          [0.0, 0.0, 1.0, 0.0],
                          [0.0, 0.0, 0.0, 1.0]])
-            f = torch.tensor(f, dtype=torch.float64).to(self.device)
+            f = torch.tensor(f, dtype=torch.float32).to(self.device)
             f = f.reshape((1, 6, 4))
             g_qk = f.repeat(bs, 1, 1).to(self.device)
             #uk = torch.unsqueeze(uk, dim=2)
@@ -703,8 +870,8 @@ class SE3FVIN(torch.nn.Module):
                     fk_plus = (1-c)*self.h*torch.matmul(g_qk, torch.unsqueeze(uk, dim = 2))
             else:
                 # Not sure if this is the right ground-truth?
-                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float64, device=self.device)
-                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float64, device=self.device)
+                fk_minus = torch.zeros(bs, self.twistdim, 1 , dtype=torch.float32, device=self.device)
+                fk_plus = torch.zeros(bs, self.twistdim, 1, dtype=torch.float32, device=self.device)
 
             fxk_minus, fRk_minus = torch.split(fk_minus, [self.linveldim, self.angveldim], dim=1)
             fxk_plus, fRk_plus = torch.split(fk_plus, [self.linveldim, self.angveldim], dim=1)
@@ -810,17 +977,24 @@ class SE3FVIN(torch.nn.Module):
     
 ###  Original  ##########################################################################################################################
     
-    def update(self, rollouts):
+    def epoch(self, rollouts):
         train_loss = 0
         eval_loss = 0
         train_item_size = 0
         eval_item_size = 0
         ### Train ###
+        self.to(self.device)
         self.train()
         for rollout_batch in rollouts.get(self.batch_size):
-            state_pred, implicit_loss = self.forward_trainingb(rollout_batch.observations, rollout_batch.new_observations, rollout_batch.actions)
+            x = rollout_batch.observations.float().requires_grad_(True)
+            x_next = rollout_batch.new_observations.float().requires_grad_(True)
+            u = rollout_batch.actions.float().requires_grad_(True)
+            # state_pred, implicit_loss = self.forward_trainingb(x, x_next, u)
+            input = torch.cat((x, u), dim=1).float()
+            input.requires_grad_(True)
+            state_pred = self.forward_traininga(input)[:,:18]
             self.optimizer.zero_grad()
-            loss = self.compute_loss(state_pred, rollout_batch.new_observations, implicit_loss)
+            loss = self.compute_loss(state_pred, rollout_batch.new_observations)
             nn.utils.clip_grad_norm_(self.parameters(),
                                       self.max_grad_norm)
             loss.backward()
@@ -831,13 +1005,22 @@ class SE3FVIN(torch.nn.Module):
         self.eval()
         with torch.no_grad():
             for rollout_batch in rollouts.get_eval(self.batch_size):
-                state_pred, implicit_loss = self.forward_trainingb(rollout_batch.observations, rollout_batch.new_observations, rollout_batch.actions)
-                loss = self.compute_loss(state_pred, rollout_batch.new_observations, implicit_loss)
+                x = rollout_batch.observations.float().requires_grad_(True)
+                x_next = rollout_batch.new_observations.float().requires_grad_(True)
+                u = rollout_batch.actions.float().requires_grad_(True)
+                # print("x: ", x[0])
+                # print("u: ", u[0])
+                # state_pred, implicit_loss = self.forward_trainingb(x, x_next, u)
+                input = torch.cat((x, u), dim=1)
+                input.requires_grad_(True)
+                state_pred = self.forward_traininga(input)[:,:18]
+                # print("state_pred: ", state_pred[0])
+                loss = self.compute_loss(state_pred, rollout_batch.new_observations)
                 eval_loss += loss.item()
                 eval_item_size += rollout_batch.observations.shape[0]
         return train_loss/train_item_size, eval_loss/eval_item_size
     
-    def compute_loss(self, state_pred, state, implicit_loss):
+    def compute_loss(self, state_pred, state, implicit_loss=0):
         x_pred, R_pred, v_pred, w_pred = torch.split(state_pred, [self.xdim, self.Rdim, self.linveldim, self.angveldim], dim=1)
         x, R, v, w = torch.split(state, [self.xdim, self.Rdim, self.linveldim, self.angveldim], dim=1)
         x_loss = L2_loss(x_pred, x)
@@ -846,22 +1029,22 @@ class SE3FVIN(torch.nn.Module):
         total_loss = x_loss + v_loss + w_loss + implicit_loss
         return total_loss
 
-    def train(self, rollouts, epochs=10):
+    def update(self, rollouts, epochs=10):
         train_loss_array = [0]*epochs
         eval_loss_array = [0]*epochs
         for i in range(epochs):
-            train_loss, eval_loss = self.update(rollouts)
+            train_loss, eval_loss = self.epoch(rollouts)
             print("Epoch: ", i, "Train loss: ", train_loss, "Eval loss: ", eval_loss)
             train_loss_array[i] = train_loss
             eval_loss_array[i] = eval_loss
-            self.earlystopping(eval_loss, self.base)
+            self.earlystopping(eval_loss, self)
             if self.earlystopping.early_stop:
                 print("Early Stopping!")
                 break
-        self.save(train_loss_array, eval_loss_array, os.path.join(os.path.dirname(__file__), "../results"))
+        self.save(train_loss_array, eval_loss_array, os.path.join(os.path.dirname(__file__), "../data"))
         
     def save(self, train_loss_array, eval_loss_array, dir):
-        torch.save(self.state_dict(), os.path.join(dir, "dynamics_model.pt"))
+        torch.save(self.state_dict(), os.path.join(dir, "dynamics_model.pth"))
         # plt.plot(train_loss_array, label="train loss")
         # plt.plot(eval_loss_array, label="eval loss")
         # plt.legend()

@@ -7,7 +7,7 @@ import torch as th
 from gymnasium import spaces
 
 from stable_baselines3.common.preprocessing import get_action_dim, get_obs_shape
-from optimal.systems.type_aliases import (
+from optimal.mlp_control.systems.type_aliases import (
     DictReplayBufferSamples,
     DictRolloutBufferSamples,
     ReplayBufferSamples,

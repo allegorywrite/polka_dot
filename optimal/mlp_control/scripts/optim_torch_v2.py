@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from optimal.models.gitai import GITAI
+from optimal.mlp_control.models.gitai import GITAI
 from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
 import matplotlib.pyplot as plt
@@ -51,6 +51,10 @@ class Optimizer:
         self.identity = torch.eye(self.x_seq.shape[1]).to(self.device)
 
         self.log_itr = 0
+
+        self.omega_target = 100
+        self.omega_u = 1
+        self.omega_jerk = 1
 
     # (roll pitch yaw)がそれぞれ(x, y, z)の微分値であるようなモデルを考える
     def model_based_model(self, x, u): # tensor -> tensor
@@ -139,6 +143,8 @@ class Optimizer:
             x_grad_mat = torch.zeros((delta.shape[0], x_seq_batch.shape[1], x_seq_batch.shape[1])).to(self.device)
             u_grad_mat = torch.zeros((delta.shape[0], x_seq_batch.shape[1], u_seq_batch.shape[1])).to(self.device)
 
+            start = time.time()
+
             for j in range(delta.shape[0]):# batch_size
                 for k in range(delta.shape[1]): # state_size
                     x_grad = torch.autograd.grad(delta[j, k], x_seq_batch, create_graph=True)[0]
@@ -146,6 +152,10 @@ class Optimizer:
                     u_grad = torch.autograd.grad(delta[j, k], u_seq_batch, create_graph=True)[0]
                     u_grad_mat[j, k] = u_grad[j].detach()
                     self.log_itr += 1
+                    elapsed_time = time.time() - start
+                    # print("elapsed_time:{0}".format(elapsed_time) + "[sec]")
+
+            # print("count:", j*k)
 
             self.x_grad_mat_all = torch.cat((self.x_grad_mat_all, x_grad_mat), 0)
             self.u_grad_mat_all = torch.cat((self.u_grad_mat_all, u_grad_mat), 0)
@@ -157,25 +167,36 @@ class Optimizer:
 
     def partial_lx(self, i):
         # 目的関数に依存
-        omega_target = 10
         grad = self.x_mat
         if type(self.x_target_normalized[i-1]) == torch.Tensor:
             x_target = self.x_target_normalized[i-1]
-            grad = omega_target * 2 * (self.x_seq[i] - x_target)
+            grad = self.omega_target * 2 * (self.x_seq[i] - x_target)
+            grad[3:] = 0
         return grad
 
     def partial_lu(self, i):
         # 目的関数に依存
-        omega_u = 0
-        omega_jerk = 0
-        grad = omega_u * 2 * self.u_seq[i]
+        grad = self.omega_u * 2 * self.u_seq[i]
         if i == 0:
-            grad += omega_jerk * 2 * (self.u_seq[i] - self.u_seq[i+1])
+            grad += self.omega_jerk * 2 * (self.u_seq[i] - self.u_seq[i+1])
         elif i == self.u_seq.shape[0] - 1:
-            grad += omega_jerk * 2 * (self.u_seq[i] - self.u_seq[i-1])
+            grad += self.omega_jerk * 2 * (self.u_seq[i] - self.u_seq[i-1])
         else:
-            grad += omega_jerk * 2 * (- self.u_seq[i+1] + 2*self.u_seq[i] - self.u_seq[i-1])
+            grad += self.omega_jerk * 2 * (- self.u_seq[i+1] + 2*self.u_seq[i] - self.u_seq[i-1])
         return grad
+    
+    def compute_cost(self):
+        cost_u = torch.norm(self.u_seq)**2
+        cost_jark = sum(torch.norm(self.u_seq[i] - self.u_seq[i-1])**2 for i in range(1, len(self.u_seq)))
+        cost_target = 0
+        for i in range(len(self.x_target_normalized)):
+            if type(self.x_target_normalized[i]) == torch.Tensor:
+                diff_vector = self.x_target_normalized[i]-self.x_seq[i+1]
+                diff_vector[3:] = 0
+                cost_target += torch.norm(diff_vector)**2
+
+        total_cost = self.omega_u*cost_u + self.omega_jerk*cost_jark + self.omega_target*cost_target
+        return total_cost
 
     def compute_grad(self):
         grad_xu_mat = torch.zeros((self.seq_len, self.seq_len, self.x_seq.shape[1], self.u_seq.shape[1])).to(self.device)
@@ -198,7 +219,7 @@ class Optimizer:
             v = np.dot(R, np.array([0, 0, 1])) 
             ax.quiver(x[i], y[i], z[i], v[0], v[1], v[2], length=0.03, normalize=True, color="r")
 
-    def optim(self, optim_itr = 40, eta=0.1, plot=False):
+    def optim(self, optim_itr = 10, eta=0.1, plot=False):
         if plot:#3d plot
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
@@ -248,7 +269,14 @@ class Optimizer:
             self.compute_grad_f(self.x_seq[:-1], self.u_seq)
             grad = self.compute_grad()
             self.u_seq = self.u_seq - eta * grad
+
             self.compute_x_seq(self.u_seq)
+            cost = self.compute_cost()
+            print("cost:", cost)
+
+            self.x_seq = self.x_seq.detach()
+            self.u_seq = self.u_seq.detach()
+            
             x_seq = self.x_seq.detach().cpu().numpy()
             x_seq_expanded = self.env.expandState(x_seq)
             X = np.append(X,[x_seq_expanded[:, 0]])
@@ -298,7 +326,7 @@ if __name__ == "__main__":
     initial_x = np.zeros(state_dim)
     initial_x[2] = 1
     # initial_u_seq = np.concatenate([np.array([[1, 0.2, 0.2, 0] for _ in range(int(time_step/2))]), np.array([[1, -0.2, 0.2, 0] for _ in range(int(time_step/2))])]) # thrust, roll, pitch, yaw
-    initial_u_seq = np.concatenate([np.array([[0.5, 0, -0.3, 0] for _ in range(int(time_step))])])
+    initial_u_seq = np.concatenate([np.array([[0.5, 0, -0.5, 0] for _ in range(int(time_step))])])
     model_based = False
 
     DEFAULT_GUI = False

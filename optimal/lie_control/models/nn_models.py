@@ -3,7 +3,7 @@
 import torch
 import numpy as np
 from optimal.lie_control.models.utils import choose_nonlinearity
-torch.set_default_dtype(torch.float64)
+torch.set_default_dtype(torch.float32)
 gpu = 0
 device = torch.device('cuda:' + str(gpu) if torch.cuda.is_available() else 'cpu')
 class MLP(torch.nn.Module):
@@ -107,7 +107,7 @@ class Mass(torch.nn.Module):
         self.M = torch.bmm(L, L.permute(0, 2, 1))
         for i in range(self.m_dim):
             self.M[:, i, i] = self.M[:, i, i] + self.eps[i]#+ 0.01
-        return self.M.repeat(bs, 1, 1)#.to(self.device)
+        return self.M.repeat(bs, 1, 1)
 
 class MassFixed(torch.nn.Module):
     '''A positive semi-definite matrix of the form LL^T + epsilon where L is a neural network'''
@@ -135,7 +135,7 @@ class MassFixed(torch.nn.Module):
         self.M = torch.bmm(L, L.permute(0, 2, 1))
         for i in range(self.m_dim):
             self.M[:, i, i] = self.M[:, i, i] + self.eps[i]#+ 0.01
-        return self.M.repeat(bs, 1, 1)#.to(self.device)
+        return self.M.repeat(bs, 1, 1)
 class MatrixNet(torch.nn.Module):
     ''' A neural net which outputs a matrix'''
     def __init__(self, input_dim, hidden_dim, output_dim, nonlinearity='tanh', bias_bool=True, shape=(2,2), init_gain = 1.0):

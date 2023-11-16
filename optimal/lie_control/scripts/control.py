@@ -20,7 +20,7 @@ import time
 import argparse
 import gym
 import numpy as np
-from optimal.lie_control.systems.a2c import A2C
+# from optimal.lie_control.systems.a2c import A2C
 from stable_baselines3.a2c import MlpPolicy
 from stable_baselines3.common.env_checker import check_env
 import ray
@@ -30,7 +30,7 @@ import torch
 
 from gym_pybullet_drones.utils.Logger import Logger
 from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
-from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
+from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import sync, str2bool
 from optimal.lie_control.systems.buffers import DictRolloutBuffer, RolloutBuffer, DataStorage
 
@@ -38,20 +38,23 @@ from optimal.lie_control.systems.buffers import DictRolloutBuffer, RolloutBuffer
 from optimal.lie_control.models.SE3FVIN import SE3FVIN
 import random
 from scipy.spatial.transform import Rotation
+torch.set_default_dtype(torch.float32)
 
 DEFAULT_RLLIB = False
-DEFAULT_GUI = True
+DEFAULT_GUI = False
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
 DEFAULT_SIMULATION_FREQ_HZ = 240
 DEFAULT_CONTROL_FREQ_HZ = 60
+# DEFAULT_SIMULATION_FREQ_HZ = 600
+# DEFAULT_CONTROL_FREQ_HZ = 600
 
 def run(
         rllib=DEFAULT_RLLIB,
         output_folder=DEFAULT_OUTPUT_FOLDER, 
         gui=DEFAULT_GUI, 
-        plot=True, 
+        plot=True,
         colab=DEFAULT_COLAB, 
         record_video=DEFAULT_RECORD_VIDEO,
         simulation_freq_hz=DEFAULT_SIMULATION_FREQ_HZ,
@@ -69,6 +72,7 @@ def run(
     #### Check the environment's spaces ########################
     env = HoverAviary(gui=gui,
                     act=ActionType.DYN,
+                    obs=ObservationType.Lie,
                     initial_xyzs=np.array([[0, 0, 1]]),
                     record=record_video,
                     freq=simulation_freq_hz,
@@ -78,6 +82,11 @@ def run(
     print("[INFO] Observation space:", env.observation_space.shape)
 
     batch_size = 1000
+    obs_dim = 18
+    action_dim = 4
+
+    obs_space_aug = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+    action_space_aug = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(action_dim,), dtype=np.float32)
 
     # dynamics_model = GITAI(
     #     output_shape=env.observation_space.shape[0]-3,
@@ -85,15 +94,19 @@ def run(
     #     device=device, 
     #     batch_size=batch_size)
     dt = 1.0 / DEFAULT_CONTROL_FREQ_HZ
-    dynamics_model = SE3FVIN(device=device, time_step=dt).to(device)
+    dynamics_model = SE3FVIN(
+        device=device, 
+        time_step=dt,
+        batch_size=batch_size,
+    ).to(device)
 
-    total_timesteps = 4000*env.SIM_FREQ
+    total_timesteps = 3000*env.SIM_FREQ
 
     data_storage = DataStorage(
             total_timesteps,
             1,
-            env.observation_space,
-            env.action_space,
+            obs_space_aug,
+            action_space_aug,
             device=device,
         )
 
@@ -104,18 +117,19 @@ def run(
                     )
     
     obs = env.reset()
-    diff_outputs = np.zeros((1, 4))
-    raw_obs = np.zeros((1, 12))
-    last_obs = obs
+    diff_outputs = np.zeros((1, action_dim))
+    raw_obs = np.zeros((1, obs_dim))
+    last_obs = raw_obs
     start = time.time()
     for i in range(total_timesteps):
         # action, _states = system_model.predict(obs,deterministic=True)
         if i % 10 == 0:
-            if i < total_timesteps*0.8: # warm up
+            if i < total_timesteps*0.2: # warm up
                 action = np.array([random.uniform(-1, 1), 0, 0, 0])
             else:
-                a = 0.5
+                a = 1
                 action = np.array([random.uniform(-1, 1), a*random.uniform(-1, 1), a*random.uniform(-1, 1), a*random.uniform(-1, 1)])
+            # action = np.array([0.5, 0, 0, 0.5])
         
         # progress
         if i % 5000 == 0:
@@ -129,11 +143,11 @@ def run(
         infos = np.array([info])
         for idx, done in enumerate(dones):
             diff_outputs[idx] = infos[idx]["diff_output"]
-            quat = infos["raw_obs"][3:7]
+            quat = infos[idx]["raw_obs"][3:7]
             R = Rotation.from_quat(quat)
             rotmat = R.as_matrix()
             omega_world = infos[idx]["raw_obs"][13:16]
-            omega_body = np.matmul(rotmat.T, omega_world[13:16])
+            omega_body = np.matmul(rotmat.T, omega_world)
             ret = np.hstack([infos[idx]["raw_obs"][0:3], rotmat.flatten(), infos[idx]["raw_obs"][10:13], omega_body]).reshape(18,)
             raw_obs[idx] = ret
         # logger.log(drone=0,
@@ -152,18 +166,19 @@ def run(
             actions,
             rewards,
         )
-        time.sleep(0.1)
-        
-        # if i%env.SIM_FREQ == 0:
-        #     env.render()
-        # sync(i, start, env.TIMESTEP)
+        # time.sleep(0.1)
+        if gui:
+            if i%env.SIM_FREQ == 0:
+                env.render()
+            sync(i, start, env.TIMESTEP)
+            time.sleep(0.1)
         if done:
             obs = env.reset()
             obses = np.array([obs])
         last_obs = raw_obs.copy()
     env.close()
 
-    dynamics_model.train(data_storage, epochs=500)
+    dynamics_model.update(data_storage, epochs=1000)
 
     # if plot:
     #     logger.plot()

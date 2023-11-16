@@ -25,3 +25,6 @@ VAE/.vscode/
 .vscode/
 
 swarm/gym_pybullet_drones/**
+
+optimal/lie_control/data/**
+!/optimal/lie_control/data/**/.gitkeep

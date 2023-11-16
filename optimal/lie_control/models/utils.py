@@ -14,7 +14,7 @@ def vee_map(R, device = None, mode = "torch", requires_grad=True):
     Performs the vee mapping from a rotation matrix to a vector
     """
     if mode == "torch":
-        a_hat = torch.tensor([-R[1, 2], R[0, 2], -R[0, 1]], device=device, dtype=torch.float64, requires_grad=requires_grad)
+        a_hat = torch.tensor([-R[1, 2], R[0, 2], -R[0, 1]], device=device, dtype=torch.float32, requires_grad=requires_grad)
     else:
         arr_out = np.zeros(3)
         arr_out[0] = -R[1, 2]
@@ -26,7 +26,7 @@ def hat_map(a, device = None, mode = "torch", requires_grad=True):
     if mode == "torch":
         a_hat = torch.tensor([[0, -a[2], a[1]],
                           [a[2], 0, -a[0]],
-                          [-a[1], a[0], 0]], device=device, dtype=torch.float64, requires_grad=requires_grad)
+                          [-a[1], a[0], 0]], device=device, dtype=torch.float32, requires_grad=requires_grad)
     else:
         a_hat = np.array([[0, -a[2], a[1]],
                       [a[2], 0, -a[0]],
@@ -36,12 +36,21 @@ def hat_map(a, device = None, mode = "torch", requires_grad=True):
 def vee_map_batch(a, device = None, mode = "torch", requires_grad=True):
     a_vee = torch.cat((a[:,2,1,None], a[:,0,2,None], a[:,1,0,None]), dim = 1)
     return a_vee
+
 def hat_map_batch(a, device = None, mode = "torch", requires_grad=True):
     zero_vec = torch.zeros_like(a[:,0])
     a_hat = torch.stack((zero_vec, -a[:,2], a[:,1], a[:,2], zero_vec, -a[:,0], -a[:,1], a[:,0], zero_vec), dim = 1)
     a_hat = a_hat.view(-1,3,3)
     return a_hat
 
+def batch_kron(A, B):
+    batch_size = A.size(0)
+    kron_result = [torch.kron(A[i], B[i]) for i in range(batch_size)]
+    return torch.stack(kron_result, dim=0)
+
+def flat_trans(x):
+    mat = torch.stack((x[:,:,0], x[:,:,3], x[:,:,6], x[:,:,1], x[:,:,4], x[:,:,7], x[:,:,2], x[:,:,5], x[:,:,8]), dim = 2)
+    return mat
 
 def L2_loss(u, v):
     temp = (u-v).pow(2)
