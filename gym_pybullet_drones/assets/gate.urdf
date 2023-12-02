@@ -1,0 +1,101 @@
+<?xml version="1.0"?>
+<robot name="frame_robot">
+  <link name="base_link">
+    <!-- This is the central link, you can make it invisible by setting its size to zero -->
+    <visual>
+      <geometry>
+        <box size="0 0 0"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <!-- Define the frame sides: top, bottom, left, right -->
+  <link name="top_side">
+    <visual>
+      <geometry>
+        <box size="0.18 0.02 0.02"/>
+      </geometry>
+      <material name="black">
+        <color rgba="1 0.26 0.22 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <geometry>
+        <box size="0.17 0.02 0.02"/>
+      </geometry>
+    </collision> -->
+  </link>
+
+  <link name="bottom_side">
+    <visual>
+      <geometry>
+        <box size="0.18 0.02 0.02"/>
+      </geometry>
+      <material name="black">
+        <color rgba="1 0.26 0.22 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <geometry>
+        <box size="0.17 0.02 0.02"/>
+      </geometry>
+    </collision> -->
+  </link>
+
+  <link name="left_side">
+    <visual>
+      <geometry>
+        <box size="0.02 0.02 0.08"/>
+      </geometry>
+      <material name="black">
+        <color rgba="1 0.26 0.22 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <geometry>
+        <box size="0.02 0.17 0.02"/>
+      </geometry>
+    </collision> -->
+  </link>
+
+  <link name="right_side">
+    <visual>
+      <geometry>
+        <box size="0.02 0.02 0.08"/>
+      </geometry>
+      <material name="black">
+        <color rgba="1 0.26 0.22 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <geometry>
+        <box size="0.02 0.17 0.02"/>
+      </geometry>
+    </collision> -->
+  </link>
+
+  <!-- Joints to fix the sides relative to the base_link -->
+  <joint name="top_side_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="top_side"/>
+    <origin xyz="0 0 0.04"/>
+  </joint>
+
+  <joint name="bottom_side_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="bottom_side"/>
+    <origin xyz="0 0 -0.04"/>
+  </joint>
+
+  <joint name="left_side_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_side"/>
+    <origin xyz="-0.08 0 0"/>
+  </joint>
+
+  <joint name="right_side_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_side"/>
+    <origin xyz="0.08 0 0"/>
+  </joint>
+</robot>

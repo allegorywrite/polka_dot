@@ -244,7 +244,7 @@ class BaseAviary(gym.Env):
         #### Start video recording #################################
         self._startVideoRecording()
         #### Return the initial observation ########################
-        return self._computeObs()
+        return self._computeObs(), self._computeInfo()
     
     ################################################################################
 

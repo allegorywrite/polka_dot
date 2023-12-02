@@ -3,6 +3,7 @@ from enum import Enum
 import numpy as np
 from gym import spaces
 import pybullet as p
+import pkg_resources
 
 from gym_pybullet_drones.envs.BaseAviary import BaseAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ImageType
@@ -168,6 +169,14 @@ class BaseSingleAgentAviary(BaseAviary):
                        )
         else:
             pass
+            
+    def addGate(self, gate_pos, gate_orn):
+        p.loadURDF(pkg_resources.resource_filename('gym_pybullet_drones', 'assets/gate.urdf'),
+                       gate_pos,
+                       p.getQuaternionFromEuler(gate_orn),
+                       physicsClientId=self.CLIENT,
+                       useFixedBase=True
+                       )
 
     ################################################################################
 

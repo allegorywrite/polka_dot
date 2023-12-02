@@ -108,6 +108,7 @@ def run(
             obs_space_aug,
             action_space_aug,
             device=device,
+            n_envs=1,
         )
 
     logger = Logger(logging_freq_hz=int(env.SIM_FREQ/env.AGGR_PHY_STEPS),

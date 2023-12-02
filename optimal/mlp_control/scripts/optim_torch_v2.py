@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from optimal.mlp_control.models.gitai import GITAI
+from optimal.lie_control.systems.sim import SimulationManager
 from gym_pybullet_drones.envs.single_agent_rl.HoverAviary import HoverAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType
 import matplotlib.pyplot as plt
@@ -23,9 +24,9 @@ class Optimizer:
             latent_dim=12,
             device=torch.device('cpu'),
             env=None,
-            debug=False):
+            gui=False,):
         self.env = env
-        self.debug = debug
+        self.gui = gui
         self.x_seq = torch.zeros((len(u_seq)+1, latent_dim)).to(device)
         initial_x_normalized = self.env._clipAndNormalizeState(initial_x)
         self.x_seq[0] = torch.from_numpy(initial_x_normalized[:latent_dim]).float().to(device)
@@ -53,8 +54,13 @@ class Optimizer:
         self.log_itr = 0
 
         self.omega_target = 100
-        self.omega_u = 1
-        self.omega_jerk = 1
+        self.omega_u = 0
+        self.omega_jerk = 0
+        self.sim_manager = SimulationManager()
+        cost = self.compute_cost(self.x_seq)
+        print("model cost:", cost)
+        cost = self.compute_cost(self.x_expert_seq)
+        print("real cost:", cost)
 
     # (roll pitch yaw)がそれぞれ(x, y, z)の微分値であるようなモデルを考える
     def model_based_model(self, x, u): # tensor -> tensor
@@ -89,7 +95,7 @@ class Optimizer:
             else:
                 input = torch.cat((x[:, 3:], u), len(x.shape)-1)
             delta = self.model(input)
-        if self.debug:
+        if self.gui:
             print("obs:", x)
             print("action:", u)
             print("delta:", delta)
@@ -104,6 +110,7 @@ class Optimizer:
             # time.sleep(0.01)
             # print("obs:", obs[0:3])
             ret = np.hstack([info["raw_obs"][0:3], info["raw_obs"][7:10], info["raw_obs"][10:13], info["raw_obs"][13:16]]).reshape(12,)
+            # print("ret:", ret)
             self.x_expert_seq[i+1] = torch.from_numpy(ret).float().to(self.device)
             # print("x_expert_seq:", self.x_expert_seq[i+1])
 
@@ -185,14 +192,14 @@ class Optimizer:
             grad += self.omega_jerk * 2 * (- self.u_seq[i+1] + 2*self.u_seq[i] - self.u_seq[i-1])
         return grad
     
-    def compute_cost(self):
+    def compute_cost(self, x_seq):
         cost_u = torch.norm(self.u_seq)**2
         cost_jark = sum(torch.norm(self.u_seq[i] - self.u_seq[i-1])**2 for i in range(1, len(self.u_seq)))
         cost_target = 0
         for i in range(len(self.x_target_normalized)):
             if type(self.x_target_normalized[i]) == torch.Tensor:
-                diff_vector = self.x_target_normalized[i]-self.x_seq[i+1]
-                diff_vector[3:] = 0
+                diff_vector = self.x_target_normalized[i][0:3]-x_seq[i+1][0:3]
+                # diff_vector[3:] = 0
                 cost_target += torch.norm(diff_vector)**2
 
         total_cost = self.omega_u*cost_u + self.omega_jerk*cost_jark + self.omega_target*cost_target
@@ -219,16 +226,16 @@ class Optimizer:
             v = np.dot(R, np.array([0, 0, 1])) 
             ax.quiver(x[i], y[i], z[i], v[0], v[1], v[2], length=0.03, normalize=True, color="r")
 
-    def optim(self, optim_itr = 10, eta=0.1, plot=False):
+    def optim(self, optim_itr = 10, eta=0.1, plot=False, plot3d=False, feedback=False):
+        x_seq = self.x_seq.detach().cpu().numpy()
+        x_seq_expanded = self.env.expandState(x_seq)
+        x_expert_seq = self.x_expert_seq.detach().cpu().numpy()
         if plot:#3d plot
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
             ax.set_xlabel("x")
             ax.set_ylabel("y")
             ax.set_zlabel("z")
-            x_seq = self.x_seq.detach().cpu().numpy()
-            x_seq_expanded = self.env.expandState(x_seq)
-            x_expert_seq = self.x_expert_seq.detach().cpu().numpy()
             # model prediction
             ax.plot(x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], marker=",")
             self.plot_quiver(ax, x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], x_seq_expanded[:, 3], x_seq_expanded[:, 4], x_seq_expanded[:, 5])
@@ -258,6 +265,21 @@ class Optimizer:
         #     lineset.lines = o3d.utility.Vector2iVector(np.array([[i, i+1] for i in range(x_seq.shape[0]-1)]))
         #     lineset.colors = o3d.utility.Vector3dVector(np.array([[1, 0, 0] for i in range(x_seq.shape[0]-1)]))
         #     o3d_vis.add_geometry(lineset)
+
+        if plot3d:
+            self.sim_manager.create_field()
+            self.sim_manager.add_origin()
+            # self.sim_manager.add_point(target[0], target[1], target[2])
+            self.sim_manager.draw_trajectory(x_expert_seq[:, 0], x_expert_seq[:, 1], x_expert_seq[:, 2], eular=x_expert_seq[:, 3:6], color=[0.7, 0.7, 0.7])
+            # self.sim_manager.draw_trajectory(x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], eular=x_seq_expanded[:, 3:6], color=[0.7, 0.7, 0.7])
+
+            for i in range(len(self.x_target)):
+                if type(self.x_target[i]) == list or type(self.x_target[i]) == np.ndarray:
+                    target = self.x_target[i]
+                    # self.sim_manager.add_point(target[0], target[1], target[2])
+                    self.sim_manager.add_quadcopter(target[0], target[1], target[2], eular=target[3:6], color=[0, 1, 0])
+                    # self.sim_manager.add_point(x_seq_expanded[i][0], x_seq_expanded[i][1], x_seq_expanded[i][2])
+            self.sim_manager.render_field()
            
             
         X,Y,Z = [],[],[]
@@ -271,8 +293,11 @@ class Optimizer:
             self.u_seq = self.u_seq - eta * grad
 
             self.compute_x_seq(self.u_seq)
-            cost = self.compute_cost()
-            print("cost:", cost)
+            self.compute_x_seq(self.u_seq)
+            cost = self.compute_cost(self.x_seq)
+            print("model cost:", cost)
+            cost = self.compute_cost(self.x_expert_seq)
+            print("real cost:", cost)
 
             self.x_seq = self.x_seq.detach()
             self.u_seq = self.u_seq.detach()
@@ -290,11 +315,15 @@ class Optimizer:
             if plot:
                 ax.plot(X[i], Y[i], Z[i], marker=",", color = cm(z)) 
 
+            # if plot3d:
+            #     self.sim_manager.draw_trajectory(x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], eular=x_seq_expanded[:, 3:6], color=[z, z, 1-z])
+            #     self.sim_manager.render_field()
+
         print("log_itr:", self.log_itr)
-        ax.plot([x_seq_expanded[-1, 0]], [x_seq_expanded[-1, 1]], [x_seq_expanded[-1, 2]], marker="o", color="r")
+        x_expert_seq = self.x_expert_seq.detach().cpu().numpy()
 
         if plot:
-            x_expert_seq = self.x_expert_seq.detach().cpu().numpy()
+            ax.plot([x_seq_expanded[-1, 0]], [x_seq_expanded[-1, 1]], [x_seq_expanded[-1, 2]], marker="o", color="r")
             ax.plot(x_expert_seq[:, 0], x_expert_seq[:, 1], x_expert_seq[:, 2], marker=",", color="r")
             # ax.set_xlim([-0.1, 0.1])
             # ax.set_ylim([-0.1, 0.1])
@@ -302,7 +331,13 @@ class Optimizer:
             ax.set_xlim([-1, 1])
             ax.set_ylim([-1, 1])
             ax.set_zlim([0, 2])
-            plt.show()     
+            plt.show()   
+
+        if plot3d:
+            self.sim_manager.draw_trajectory(x_expert_seq[:, 0], x_expert_seq[:, 1], x_expert_seq[:, 2], eular=x_expert_seq[:, 3:6], color=[0.3, 0.8, 1.0])
+            # self.sim_manager.draw_trajectory(x_seq_expanded[:, 0], x_seq_expanded[:, 1], x_seq_expanded[:, 2], eular=x_seq_expanded[:, 3:6], color=[1, 0.5, 0])
+            self.sim_manager.render_field()
+            self.sim_manager.viz_run()  
 
         # if plot:
         #     o3d_vis.run()   
@@ -312,7 +347,12 @@ class Optimizer:
 if __name__ == "__main__":
 
     parser = ArgumentParser()
-    parser.add_argument('--debug', action='store_true', help='debug mode')
+    parser.add_argument('--gui', action='store_true', help='debug mode')
+    parser.add_argument('--open3d', action='store_true', help='debug mode')
+    parser.add_argument('--matplotlib', action='store_true', help='debug mode')
+    parser.add_argument('--feedback', action='store_true', help='debug mode')
+    parser.add_argument('--optim_itr', type=int, default=0, help='debug mode')
+    parser.add_argument('--blackbox', action='store_true', help='debug mode')
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -320,13 +360,16 @@ if __name__ == "__main__":
     else:
         device = torch.device('cpu')
 
-    time_step = 30
+    time_step = 32
     state_dim = 12 # x, y, z, roll, pitch, yaw, vx, vy, vz, wx, wy, wz
     latent_dim = 9 # x, y, z, roll, pitch, yaw, vx, vy, vz
     initial_x = np.zeros(state_dim)
     initial_x[2] = 1
     # initial_u_seq = np.concatenate([np.array([[1, 0.2, 0.2, 0] for _ in range(int(time_step/2))]), np.array([[1, -0.2, 0.2, 0] for _ in range(int(time_step/2))])]) # thrust, roll, pitch, yaw
-    initial_u_seq = np.concatenate([np.array([[0.5, 0, -0.5, 0] for _ in range(int(time_step))])])
+    # initial_u_seq = np.concatenate([np.array([[0.5, 0, -0.5, 0] for _ in range(int(time_step))])])
+    initial_u_seq = np.zeros((time_step, 4))
+    initial_u_seq[:int(time_step/2)] = np.concatenate([np.array([[1, 0, 0, 0] for _ in range(int(time_step/2))])])
+    initial_u_seq[int(time_step/2):] = np.concatenate([np.array([[1, 0, 0, 0] for _ in range(int(time_step/2))])])
     model_based = False
 
     DEFAULT_GUI = False
@@ -359,7 +402,8 @@ if __name__ == "__main__":
     #                          0, 0, 0, 0, 0, 0, 0, 0, 0])
     # x_target[20] = np.array([0.5, 0.3, -0.1,
     #                          0, 0, 0, 0, 0, 0, 0, 0, 0])
-    x_target[-1] = np.array([0.5, 0, 1.3, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    # x_target[-1] = np.array([0.5, 0, 1.3, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    x_target[-1] = np.array([0.5, -0.4, 1.7, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     optim = Optimizer(
         initial_x=initial_x,
         u_seq=initial_u_seq,
@@ -369,9 +413,15 @@ if __name__ == "__main__":
         model_based=model_based,
         latent_dim=latent_dim,
         env=env,
-        debug=args.debug,
+        gui=args.gui,
         )
     start = time.time()
-    optim.optim(plot=True)
+    optim.optim(
+        optim_itr=args.optim_itr,
+        plot=args.matplotlib, 
+        plot3d=args.open3d,
+        feedback=args.feedback,
+        eta=1.5
+    )
     elapsed_time = time.time() - start
     print("elapsed_time:{0}".format(elapsed_time) + "[sec]")

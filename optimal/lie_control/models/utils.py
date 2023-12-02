@@ -5,6 +5,7 @@ import torch, pickle
 import numpy as np
 import scipy.integrate
 solve_ivp = scipy.integrate.solve_ivp
+from scipy.spatial.transform import Rotation
 
 ################################ Utils ################################
 
@@ -339,3 +340,34 @@ def choose_nonlinearity(name):
     else:
         raise ValueError("nonlinearity not recognized")
     return nl
+
+def get_R_from_eular(eular):
+    batch = eular.shape[0]
+    x = eular[:,0]
+    y = eular[:,1]
+    z = eular[:,2]
+    cosx = torch.cos(x)
+    sinx = torch.sin(x)
+    cosy = torch.cos(y)
+    siny = torch.sin(y)
+    cosz = torch.cos(z)
+    sinz = torch.sin(z)
+    R = torch.zeros(batch, 3, 3)
+    R[:,0,0] = cosz * cosy
+    R[:,0,1] = cosz * siny * sinx - cosx * sinz
+    R[:,0,2] = sinz * sinx + cosz * cosx * siny
+    R[:,1,0] = cosy * sinz
+    R[:,1,1] = cosz * cosx + sinz * siny * sinx
+    R[:,1,2] = cosx * sinz * siny - cosz * sinx
+    R[:,2,0] = -siny
+    R[:,2,1] = cosy * sinx
+    R[:,2,2] = cosy * cosx
+    return R
+
+def get_eular_from_R(R):
+    batch = R.shape[0]
+    x = torch.atan2(R[:,2,1], R[:,2,2])
+    y = torch.atan2(-R[:,2,0], torch.sqrt(R[:,2,1]**2 + R[:,2,2]**2))
+    z = torch.atan2(R[:,1,0], R[:,0,0])
+    eular = torch.stack((x,y,z), dim=1)
+    return eular

@@ -359,7 +359,7 @@ class DataStorage(BaseBuffer):
         self.gae_lambda = gae_lambda
         self.gamma = gamma
         self.generator_ready = False
-        self.indices = np.random.permutation(self.buffer_size * self.n_envs)
+        self.indices = np.random.permutation(self.buffer_size)
         self.eval_rate = eval_rate
         self.reset()
 
@@ -423,27 +423,29 @@ class DataStorage(BaseBuffer):
         # assert self.full, ""
         
         # Prepare the data
-        if not self.generator_ready:
-            _tensor_names = [
-                "observations",
-                "new_observations",
-                "actions",
-                "values",
-                "log_probs",
-                "advantages",
-                "returns",
-            ]
+        # if not self.generator_ready:
+        #     _tensor_names = [
+        #         "observations",
+        #         "new_observations",
+        #         "actions",
+        #         "values",
+        #         "log_probs",
+        #         "advantages",
+        #         "returns",
+        #     ]
 
-            for tensor in _tensor_names:
-                self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
-            self.generator_ready = True
+        #     for tensor in _tensor_names:
+        #         print(self.__dict__[tensor].shape)
+        #         self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
+        #         print(self.__dict__[tensor].shape)
+        #     self.generator_ready = True
 
         # Return everything, don't create minibatches
         if batch_size is None:
-            batch_size = self.buffer_size * self.n_envs
+            batch_size = self.buffer_size
 
-        start_idx = int(self.buffer_size * self.n_envs * self.eval_rate)
-        while start_idx < self.buffer_size * self.n_envs:
+        start_idx = int(self.buffer_size * self.eval_rate)
+        while start_idx < self.buffer_size:
             yield self._get_samples(self.indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
 
@@ -451,28 +453,28 @@ class DataStorage(BaseBuffer):
         # assert self.full, ""
         
         # Prepare the data
-        if not self.generator_ready:
-            _tensor_names = [
-                "observations",
-                "new_observations",
-                "actions",
-                "values",
-                "log_probs",
-                "advantages",
-                "returns",
-            ]
+        # if not self.generator_ready:
+        #     _tensor_names = [
+        #         "observations",
+        #         "new_observations",
+        #         "actions",
+        #         "values",
+        #         "log_probs",
+        #         "advantages",
+        #         "returns",
+        #     ]
 
-            for tensor in _tensor_names:
-                self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
-            self.generator_ready = True
+        #     for tensor in _tensor_names:
+        #         self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
+        #     self.generator_ready = True
 
         # Return everything, don't create minibatches
         if batch_size is None:
-            batch_size = self.buffer_size * self.n_envs
+            batch_size = self.buffer_size
         start_idx = 0
-        while start_idx < int(self.buffer_size * self.n_envs * self.eval_rate):
-            if start_idx + batch_size > int(self.buffer_size * self.n_envs * self.eval_rate):
-                batch_size = int(self.buffer_size * self.n_envs * self.eval_rate) - start_idx
+        while start_idx < int(self.buffer_size * self.eval_rate):
+            if start_idx + batch_size > int(self.buffer_size * self.eval_rate):
+                batch_size = int(self.buffer_size * self.eval_rate) - start_idx
             yield self._get_samples(self.indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
 

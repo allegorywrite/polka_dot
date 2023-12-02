@@ -25,21 +25,25 @@ class SimulationManager():
         # body = o3d.geometry.TriangleMesh.create_box(width=0.01, height=0.01, depth=0.01)
         # body.paint_uniform_color([1, 0, 0])
         # quadcopter propeller
+        # drone_radius = 0.005
+        # propeller_radius = 0.003
+        # arm_thickness = 0.0004
         drone_radius = 0.05
         propeller_radius = 0.03
-        arm_thickness = 0.004
+        arm_thickness = 0.001
+        propeller_thickness = 0.001
         propeller_color = color
         body_color = [color[0]/2, color[1]/2, color[2]/2]
-        propeller0 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=0.001)
+        propeller0 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=propeller_thickness)
         propeller0.paint_uniform_color(propeller_color)
         propeller0.translate(np.array([0, drone_radius, arm_thickness]))
-        propeller1 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=0.001)
+        propeller1 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=propeller_thickness)
         propeller1.paint_uniform_color(propeller_color)
         propeller1.translate(np.array([0, -drone_radius, arm_thickness]))
-        propeller2 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=0.001)
+        propeller2 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=propeller_thickness)
         propeller2.paint_uniform_color(propeller_color)
         propeller2.translate(np.array([drone_radius, 0, arm_thickness]))
-        propeller3 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=0.001)
+        propeller3 = o3d.geometry.TriangleMesh.create_cylinder(radius=propeller_radius, height=propeller_thickness)
         propeller3.paint_uniform_color(propeller_color)
         propeller3.translate(np.array([-drone_radius, 0, arm_thickness]))
         # quadcopter arm
@@ -72,11 +76,11 @@ class SimulationManager():
         )
         return rot_mat
 
-    def add_quadcopter(self, x, y, z, pitch=0, roll=0, yaw=0, R=None, color=[0, 0, 1]):
+    def add_quadcopter(self, x, y, z, eular=None, R=None, color=[0, 0, 1]):
         mesh = self.create_quadcopter(color=color)
         mesh.translate(np.array([x, y, z]))
         if R is None:
-            R = self.rpy_to_rotation_matrix(roll, pitch, yaw)
+            R = Rotation.from_euler('xyz', eular).as_matrix()
         mesh.rotate(R)
         self.vis.add_geometry(mesh)
 
@@ -84,10 +88,13 @@ class SimulationManager():
         origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
         self.vis.add_geometry(origin)
 
-    def draw_trajectory(self, x, y, z, R_flat, color=[0, 0, 1]):
+    def draw_trajectory(self, x, y, z, R_flat=None, eular=None, color=[0, 0, 1]):
         for i in range(len(x)):
-            R = R_flat[i].reshape(3, 3)
-            self.add_quadcopter(x[i], y[i], z[i], R=R, color=color)
+            if eular is not None:
+                self.add_quadcopter(x[i], y[i], z[i], eular=eular[i], color=color)
+            else:
+                R = R_flat[i].reshape(3, 3)
+                self.add_quadcopter(x[i], y[i], z[i], R=R, color=color)
 
     def add_point(self, x, y, z):
         pcd = o3d.geometry.PointCloud()
